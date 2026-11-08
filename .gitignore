@@ -11,3 +11,5 @@ data/raw/
 tools/
 # This machine's settings for local runs; overrides local.default.toml.
 local.toml
+# Secrets for hosted runs (ANTHROPIC_API_KEY); read by the Taskfile, never committed.
+.env.local
