@@ -124,6 +124,14 @@ the model with `SLOTS=1 CTX=65536` for them. Hermes Agent is run from its own so
 virtualenv (pass its executable with `--bin`); Claude Code from `claude` on your PATH. Both run
 in a scratch workspace with an empty config home, no credentials, and only the meter to talk to.
 
+## Running against a hosted model
+
+`task hosted RUN=h1 LIMIT=50` runs the graph, the per-item agent and Claude Code against Claude
+Haiku 5.5 on Anthropic's API (arms `graph-haiku`, `agent-haiku`, `claude-code-haiku`). Put the
+key in `.env.local` as `ANTHROPIC_API_KEY=...`; the file is gitignored and only the Taskfile reads
+it. The meter sits in front of the API as before, on its own port, so a local run can go on at
+the same time. Thinking is off, matching the local thinking-off runs.
+
 The inputs are 1,000 listings from Amazon's Shopping Queries dataset, Apache-2.0; see
 [data/enrich/README.md](data/enrich/README.md) for the attribution and how the sample is drawn.
 

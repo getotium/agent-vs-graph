@@ -106,6 +106,15 @@ spread, which is most of the variation.
 - **Thinking is a condition of the run,** off or a fixed token budget for every arm, recorded with
   the run. Both conditions are published: thinking changes output length several times over, and
   which shape it favors is a result.
+- **Hosted runs** put the same arms on Claude Haiku 5.5 through Anthropic's own API, so the
+  agent arms run on a model of the kind they are built for, and the token counts and cache use
+  are the vendor's, not estimates. Our own arms speak the native Messages API rather than an
+  OpenAI-compatible shim, so caching can be set as a careful builder would: every arm marks its
+  shared system prompt, and the agent also turns on automatic caching of its growing conversation
+  (the documented pattern for agent loops). A graph step's request ends in one item's listing, so
+  caching its tail would only pay the write premium. Thinking is off and sampling is left at the
+  model's default, which this model requires. Requests the priced model answered itself are
+  billed as the vendor counted them; nothing is replayed for them.
 - **A run records its conditions** (items, slots, thinking, token cap, models, the llama.cpp
   build and the commit of this repo) and refuses to resume under different ones.
 

@@ -13,10 +13,15 @@ shape. Every model request goes through the meter, which records its tokens to t
 `ledger.jsonl`; each arm's output for each item is in `<arm>.jsonl`. Scores come from comparing
 those outputs with the gold answers, and costs from pricing the ledger afterwards.
 
-The runs are made on a local GPU with open models, so they cost nothing to reproduce. The money
-figures are what the same tokens would cost at each vendor's published prices. Token counts are
-the local model's, counted by its own tokenizer; a hosted model would count the same text
-somewhat differently, so the figures are a like-for-like comparison between arms, not a quote.
+Most runs are made on a local GPU with open models, so they cost nothing to reproduce. Their
+money figures are what the same tokens would cost at each vendor's published prices. Token counts
+are the local model's, counted by its own tokenizer; a hosted model would count the same text
+somewhat differently, so those figures are a like-for-like comparison between arms, not a quote.
+
+A hosted run (its conditions name a `provider` and `model`) ran on the vendor's own API. Priced
+as that model, its figures are the vendor's own counts, cache reads and writes included, at the
+published rates: what the run actually cost. Priced as another vendor's model, its tokens are
+treated like a local run's.
 
 ## Arms
 

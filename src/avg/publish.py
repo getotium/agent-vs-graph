@@ -109,6 +109,9 @@ CONDITIONS = {
     "large": "the large model",
     "harness_ctx": "context window for the whole-file harnesses",
     "code": "the commit of this repo the run used",
+    "provider": "the hosted API the run used; its own counts are the bill when priced as its model",
+    "model": "the hosted model every arm used",
+    "anthropic_version": "the Messages API version the requests named",
 }
 
 
