@@ -163,7 +163,7 @@ def app(upstreams: Upstreams, ledger_path: Path) -> web.Application:
                     status=status,
                     ts=time.time(),
                     streamed=stream,
-                    extra={"prefix": prefix_of(wire, body)},
+                    extra={"prefix": prefix_of(wire, body)} | ({"thinking": u.thinking} if u.thinking >= 0 else {}),
                 ),
             )
         return resp

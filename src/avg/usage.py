@@ -21,6 +21,9 @@ class Usage:
     cache_write: int = 0
     output: int = 0
     model: str = ""
+    # Of `output`, the tokens spent thinking, when the server says; -1 when it does not. Not added
+    # to the cost: thinking is billed as output and already counted in it.
+    thinking: int = -1
 
     @property
     def prompt(self) -> int:
@@ -41,6 +44,7 @@ def from_openai(body: dict) -> Usage:
         cache_read=cached,
         output=u.get("completion_tokens") or 0,
         model=body.get("model") or "",
+        thinking=_detail(u, "completion_tokens_details", "reasoning_tokens"),
     )
 
 
@@ -53,7 +57,13 @@ def from_anthropic(body: dict) -> Usage:
         cache_write=u.get("cache_creation_input_tokens") or 0,
         output=u.get("output_tokens") or 0,
         model=body.get("model") or "",
+        thinking=_detail(u, "output_tokens_details", "thinking_tokens"),
     )
+
+
+def _detail(u: dict, group: str, key: str) -> int:
+    v = (u.get(group) or {}).get(key)
+    return v if isinstance(v, int) else -1
 
 
 def _events(sse: bytes):
@@ -100,6 +110,8 @@ def from_anthropic_stream(sse: bytes) -> Usage:
         elif kind == "message_delta":
             u = ev.get("usage") or {}
             usage.output = u.get("output_tokens", usage.output) or usage.output
+            thinking = _detail(u, "output_tokens_details", "thinking_tokens")
+            usage.thinking = thinking if thinking >= 0 else usage.thinking
             for src, dst in (
                 ("input_tokens", "input"),
                 ("cache_read_input_tokens", "cache_read"),

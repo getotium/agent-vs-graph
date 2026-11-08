@@ -70,6 +70,7 @@ The conditions every arm in the run shared, from the run's `meta.json`:
 | Requests / item | Answered model requests per item. |
 | Prompt | Input tokens per item, everything sent, cached or not. |
 | Output | Generated tokens per item, thinking included. |
+| Of which thinking | The part of Output spent thinking, when the server reports it for every request; `–` when it does not. Already in Output and in the cost. |
 | Refused requests | Requests the server answered with an error, in total. They report no usage, so they are not priced. |
 
 ## Price tables

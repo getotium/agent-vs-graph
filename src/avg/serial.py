@@ -102,21 +102,29 @@ def hosted_config(run: str, limit: int, slots: int, meter_port: int) -> Config:
                   large_harness=_NO_SERVER, meter_port=meter_port, slots=slots)  # fmt: skip
 
 
-def hosted_plan(c: Config, model: str, tag: str = "haiku") -> list[Step]:
+def hosted_plan(c: Config, model: str, thinking: str = "off", tag: str = "haiku") -> list[Step]:
     """The same arms against a hosted Anthropic model: the graph and the per-item agent on the
-    native Messages API, and Claude Code. Hermes is left out: it is run against local models."""
+    native Messages API, and Claude Code. Hermes is left out: it is run against local models.
+
+    Thinking "off" leaves Claude Code out too: it cannot turn thinking off on a model that thinks
+    by default (MAX_THINKING_TOKENS and its disable switch do not stop it), and a harness that
+    thinks beside arms that do not is not the same condition. "default" runs every arm as the
+    model ships."""
     meter, n = f"http://127.0.0.1:{c.meter_port}", str(c.slots)
     common = ["--run", c.run, "--limit", str(c.limit), "--meter", meter]
     out = lambda arm: ["--out", f"runs/{c.run}/{arm}.jsonl"]
     graph, agent, code = f"graph-{tag}", f"agent-{tag}", f"claude-code-{tag}"
-    return [
-        Step(graph, [], ["run", "--shape", "graph", "--arm", graph, *common, "--model", model, "--wire", "anthropic",
+    wire = ["--wire", "anthropic", "--thinking", thinking]
+    steps = [
+        Step(graph, [], ["run", "--shape", "graph", "--arm", graph, *common, "--model", model, *wire,
                          "--concurrency", n, *out(graph)]),
-        Step(agent, [], ["run", "--shape", "agent", "--arm", agent, *common, "--model", model, "--wire", "anthropic",
+        Step(agent, [], ["run", "--shape", "agent", "--arm", agent, *common, "--model", model, *wire,
                          "--concurrency", n, *out(agent)]),
-        Step(code, [], ["harness", "--harness", "claude-code", "--arm", code, *common, "--model", model, "--hosted",
-                        *out(code)]),
     ]  # fmt: skip
+    if thinking == "default":
+        steps.append(Step(code, [], ["harness", "--harness", "claude-code", "--arm", code, *common, "--model", model,
+                                     "--hosted", *out(code)]))  # fmt: skip
+    return steps
 
 
 def server_argv(c: Config, s: Server) -> list[str]:

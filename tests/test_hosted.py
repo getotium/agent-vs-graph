@@ -115,9 +115,41 @@ async def test_a_refused_key_breaks_the_run_and_a_bad_request_fails_the_item(sta
         await s.close()
 
 
+def test_claude_code_runs_only_where_its_thinking_matches_the_condition():
+    cfg = serial.hosted_config("h1", 50, 4, 8788)
+    off = serial.hosted_plan(cfg, "claude-haiku-5-5", "off")
+    assert [s.arm for s in off] == ["graph-haiku", "agent-haiku"], "Claude Code cannot turn thinking off"
+    shipped = serial.hosted_plan(cfg, "claude-haiku-5-5", "default")
+    assert [s.arm for s in shipped] == ["graph-haiku", "agent-haiku", "claude-code-haiku"]
+    assert shipped[0].argv[shipped[0].argv.index("--thinking") + 1] == "default"
+
+
+def test_thinking_off_is_sent_and_the_default_is_left_alone():
+    msgs = [{"role": "user", "content": "hi"}]
+    assert to_anthropic("m", msgs, None, 10, "system", "off")["thinking"] == {"type": "disabled"}
+    assert "thinking" not in to_anthropic("m", msgs, None, 10, "system", "default")
+
+
+def test_thinking_tokens_are_recorded_when_the_server_reports_them():
+    from avg import usage
+
+    a = usage.from_anthropic({"usage": {"output_tokens": 300, "output_tokens_details": {"thinking_tokens": 200}}})
+    o = usage.from_openai({"usage": {"completion_tokens": 50, "completion_tokens_details": {"reasoning_tokens": 0}}})
+    assert (a.output, a.thinking, o.thinking) == (300, 200, 0), "zero is reported, not missing"
+    assert usage.from_openai({"usage": {"completion_tokens": 50}}).thinking == -1, "not reported"
+
+    def rec(item, extra):
+        return Record(run="r", arm="a", task="t", item=item, wire="anthropic", model="m", input=1, cache_read=0,
+                      cache_write=0, output=300, latency_ms=1, status=200, extra=extra)  # fmt: skip
+
+    [g] = report.group([rec("x", {"thinking": 200}), rec("y", {"thinking": 100})])
+    assert g.thinking_per_item() == 150
+    [partial] = report.group([rec("x", {"thinking": 200}), rec("y", {})])
+    assert partial.thinking_per_item() is None, "a partial count would read as a low one"
+
+
 def test_the_hosted_plan_needs_no_servers_and_never_carries_the_key():
-    steps = serial.hosted_plan(serial.hosted_config("h1", 50, 4, 8788), "claude-haiku-5-5")
-    assert [s.arm for s in steps] == ["graph-haiku", "agent-haiku", "claude-code-haiku"]
+    steps = serial.hosted_plan(serial.hosted_config("h1", 50, 4, 8788), "claude-haiku-5-5", "default")
     assert all(s.servers == [] for s in steps)
     assert "--wire" in steps[0].argv and "--hosted" in steps[2].argv
     assert all("http://127.0.0.1:8788" in s.argv for s in steps), "its own meter port, clear of a local run's"

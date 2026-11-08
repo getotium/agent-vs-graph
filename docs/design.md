@@ -112,9 +112,17 @@ spread, which is most of the variation.
   OpenAI-compatible shim, so caching can be set as a careful builder would: every arm marks its
   shared system prompt, and the agent also turns on automatic caching of its growing conversation
   (the documented pattern for agent loops). A graph step's request ends in one item's listing, so
-  caching its tail would only pay the write premium. Thinking is off and sampling is left at the
-  model's default, which this model requires. Requests the priced model answered itself are
-  billed as the vendor counted them; nothing is replayed for them.
+  caching its tail would only pay the write premium. Sampling is left at the model's default,
+  which this model requires. Requests the priced model answered itself are billed as the vendor
+  counted them; nothing is replayed for them.
+- **Hosted runs have two conditions.** *Model default*: every arm runs the model as it ships
+  (Haiku 5.5: adaptive thinking at medium effort), the way customers use it. *Thinking off*: the
+  graph and the per-item agent with thinking disabled, matching the local thinking-off runs.
+  Claude Code is not in the thinking-off runs: on a model that thinks by default it cannot turn
+  thinking off (its `MAX_THINKING_TOKENS` and disable switch do not stop it), and a harness that
+  thinks beside arms that do not would not be the same condition. Thinking tokens are reported
+  separately where the server gives them, so how much of an arm's output was thinking is visible.
+  Arms are compared only within one run: model, tokenizer and thinking all change the counts.
 - **A run records its conditions** (items, slots, thinking, token cap, models, the llama.cpp
   build and the commit of this repo) and refuses to resume under different ones.
 

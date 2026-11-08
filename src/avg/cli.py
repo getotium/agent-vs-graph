@@ -64,7 +64,7 @@ async def _run(a: argparse.Namespace, out) -> list[dict]:
         # in one item's listing, so caching the tail would pay the write premium for nothing. An
         # agent also caches its growing conversation, which its next turn re-sends.
         cache = "system" if a.shape == "graph" else "conversation"
-        client = Client(session, a.meter, a.run, wire=a.wire, api_key=_key(a.wire), cache=cache)
+        client = Client(session, a.meter, a.run, wire=a.wire, api_key=_key(a.wire), cache=cache, thinking=a.thinking)
         if a.shape == "graph":
             models = enrich.Models(small=a.small or a.model, large=a.large or a.model)
             reasons: dict[str, str] = {}
@@ -141,11 +141,12 @@ def _hosted(a: argparse.Namespace) -> int:
     if not os.environ.get(llm.KEY_ENV):
         raise SystemExit(f"hosted runs need {llm.KEY_ENV} (put it in .env.local; the Taskfile loads it)")
     cfg = serial.hosted_config(a.run, a.limit, a.slots, a.port)
-    steps = serial.hosted_plan(cfg, a.model)
+    steps = serial.hosted_plan(cfg, a.model, a.thinking)
     if a.only:
         wanted = set(a.only.split(","))
         steps = [s for s in steps if s.arm in wanted]
-    meta = {"limit": a.limit, "slots": cfg.slots, "thinking": 0, "max_tokens": Client.max_tokens,
+    meta = {"limit": a.limit, "slots": cfg.slots, "thinking": 0 if a.thinking == "off" else "model default",
+            "max_tokens": Client.max_tokens,
             "provider": "anthropic", "model": a.model, "anthropic_version": llm.ANTHROPIC_VERSION,
             "code": serial.code_version()}  # fmt: skip
     return _sequence(a, cfg, steps, meta, ["--openai", llm.ANTHROPIC_API, "--anthropic", llm.ANTHROPIC_API])
@@ -214,6 +215,12 @@ def main(argv: list[str] | None = None) -> int:
         default="openai",
         help="openai for local models; anthropic for a hosted Claude model (key from ANTHROPIC_API_KEY)",
     )
+    r.add_argument(
+        "--thinking",
+        choices=["off", "default"],
+        default="off",
+        help="anthropic: off sends thinking disabled; default leaves the model's own (local: set on the server)",
+    )
     r.add_argument("--max-turns", type=int, default=8)
     r.add_argument("--out", type=Path, required=True, help="results file (.jsonl)")
 
@@ -255,6 +262,9 @@ def main(argv: list[str] | None = None) -> int:
     ho.add_argument("--limit", type=int, default=50)
     ho.add_argument("--only", default="", help="comma-separated arms to run (default: all)")
     ho.add_argument("--model", default="claude-haiku-5-5")
+    ho.add_argument("--thinking", choices=["off", "default"], default="off",
+                    help="off: graph and agent with thinking disabled (Claude Code cannot be); default: every arm "
+                         "as the model ships")  # fmt: skip
     ho.add_argument("--slots", type=int, default=4, help="requests in flight for per-item arms")
     ho.add_argument("--port", type=int, default=8788, help="the meter's port (a local run may hold 8787)")
     ho.add_argument("--replace", action="store_true", help="rerun arms that already have records in this run")

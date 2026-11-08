@@ -37,6 +37,13 @@ class Group:
     def per_item(self, field_: str) -> float:
         return sum(getattr(r, field_) for r in self.records) / self.items
 
+    def thinking_per_item(self) -> float | None:
+        """Output tokens spent thinking, per item; None unless the server reported it for every
+        request (a partial count would read as a low one)."""
+        if not self.records or any("thinking" not in r.extra for r in self.records):
+            return None
+        return sum(r.extra["thinking"] for r in self.records) / self.items
+
     def billed(self, price: Price) -> tuple[dict[str, list[Record]], int]:
         """The units' records as the price's provider would bill them: its cache rule replayed
         over the recorded prompts (the local server's cache hits are dropped), and how many
@@ -215,13 +222,15 @@ def render(
         out += _about("What each arm sent to the model and got back, per item, counted at the wire.", guide,
                       "tokens-per-item")  # fmt: skip
         out += [
-            "| Arm | Items | Requests / item | Prompt | Output | Refused requests |",
-            "| --- | ---: | ---: | ---: | ---: | ---: |",
+            "| Arm | Items | Requests / item | Prompt | Output | Of which thinking | Refused requests |",
+            "| --- | ---: | ---: | ---: | ---: | ---: | ---: |",
         ]
         for g in tg:
+            t = g.thinking_per_item()
+            think = "–" if t is None else f"{t:,.0f}"
             out.append(
                 f"| {g.arm} | {g.items:,} | {len(g.records) / g.items:,.1f} | {g.per_item('prompt'):,.0f} | "
-                f"{g.per_item('output'):,.0f} | {g.failed:,} |"
+                f"{g.per_item('output'):,.0f} | {think} | {g.failed:,} |"
             )
         out += [
             "",

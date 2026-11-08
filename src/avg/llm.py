@@ -62,6 +62,9 @@ class Client:
     # (and the tools before it); "conversation" also turns on automatic caching of the growing
     # message history, the documented pattern for agent loops.
     cache: str = "system"
+    # anthropic: "off" sends thinking disabled; "default" leaves the model's own default (Haiku
+    # 5.5: adaptive thinking at medium effort).
+    thinking: str = "off"
     tries: int = 6
     backoff_s: float = 2.0  # the first wait when the server gives no retry-after; doubles each time
 
@@ -81,7 +84,7 @@ class Client:
         """One request; returns the assistant message in OpenAI's shape. Locally, temperature 0 so
         reruns are comparable; a hosted Anthropic model takes only its default sampling."""
         if self.wire == "anthropic":
-            body = to_anthropic(model, messages, tools, self.max_tokens, self.cache)
+            body = to_anthropic(model, messages, tools, self.max_tokens, self.cache, self.thinking)
             headers = {"x-api-key": self.api_key, "anthropic-version": ANTHROPIC_VERSION}
             return from_anthropic(await self._post(self.url(arm, task, item), body, headers))
         body = {"model": model, "messages": messages, "temperature": 0, "max_tokens": self.max_tokens}
@@ -118,9 +121,11 @@ class Client:
         raise ModelError("unreachable")  # the loop always returns or raises
 
 
-def to_anthropic(model: str, messages: list[dict], tools: list[dict] | None, max_tokens: int, cache: str) -> dict:
-    """An OpenAI-shaped conversation as a Messages request. Thinking is off: the hosted runs are
-    the thinking-off condition, and Claude Haiku 5.5 thinks by default unless told not to."""
+def to_anthropic(
+    model: str, messages: list[dict], tools: list[dict] | None, max_tokens: int, cache: str, thinking: str = "off"
+) -> dict:
+    """An OpenAI-shaped conversation as a Messages request. Thinking "off" is sent explicitly,
+    since Claude Haiku 5.5 thinks by default; "default" sends nothing and lets it."""
     system = [m["content"] for m in messages if m["role"] == "system"]
     out: list[dict] = []
 
@@ -148,7 +153,9 @@ def to_anthropic(model: str, messages: list[dict], tools: list[dict] | None, max
                     args = {}
                 add("assistant", {"type": "tool_use", "id": call.get("id", ""), "name": fn.get("name", ""),
                                   "input": args if isinstance(args, dict) else {}})  # fmt: skip
-    body: dict = {"model": model, "max_tokens": max_tokens, "messages": out, "thinking": {"type": "disabled"}}
+    body: dict = {"model": model, "max_tokens": max_tokens, "messages": out}
+    if thinking == "off":
+        body["thinking"] = {"type": "disabled"}
     if system:
         body["system"] = [{"type": "text", "text": "\n\n".join(system), "cache_control": {"type": "ephemeral"}}]
     if tools:
