@@ -216,9 +216,13 @@ def index(results: Path) -> None:
     for meta_path in sorted(results.glob("*/meta.json")):
         m = json.loads(meta_path.read_text(encoding="utf-8"))
         run = meta_path.parent.name
-        thinking = (
-            "off" if not m.get("thinking") else ("no limit" if m["thinking"] < 0 else f"{m['thinking']:,} tokens")
-        )
+        t = m.get("thinking")
+        if isinstance(t, str):
+            thinking = t  # a hosted run's "model default"
+        else:
+            thinking = "off" if not t else ("no limit" if t < 0 else f"{t:,} tokens")
+        if m.get("model"):
+            thinking += f" ({m['model']})"
         code = m.get("code", "–") + (" (recorded at publication)" if m.get("code_note") else "")
         rows.append(f"| {run} | {m.get('limit', '–')} | {thinking} | {m.get('slots', '–')} | {code} | "
                     f"[report]({run}/report.md) |\n")  # fmt: skip
