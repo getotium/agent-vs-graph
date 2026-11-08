@@ -93,6 +93,32 @@ def plan(c: Config) -> list[Step]:
     return steps
 
 
+# A hosted run starts no model servers; its Config only carries the run, the slots and the port.
+_NO_SERVER = Server("", "", 0)
+
+
+def hosted_config(run: str, limit: int, slots: int, meter_port: int) -> Config:
+    return Config(run=run, limit=limit, llama_server="", device="", small=_NO_SERVER, large=_NO_SERVER,
+                  large_harness=_NO_SERVER, meter_port=meter_port, slots=slots)  # fmt: skip
+
+
+def hosted_plan(c: Config, model: str, tag: str = "haiku") -> list[Step]:
+    """The same arms against a hosted Anthropic model: the graph and the per-item agent on the
+    native Messages API, and Claude Code. Hermes is left out: it is run against local models."""
+    meter, n = f"http://127.0.0.1:{c.meter_port}", str(c.slots)
+    common = ["--run", c.run, "--limit", str(c.limit), "--meter", meter]
+    out = lambda arm: ["--out", f"runs/{c.run}/{arm}.jsonl"]
+    graph, agent, code = f"graph-{tag}", f"agent-{tag}", f"claude-code-{tag}"
+    return [
+        Step(graph, [], ["run", "--shape", "graph", "--arm", graph, *common, "--model", model, "--wire", "anthropic",
+                         "--concurrency", n, *out(graph)]),
+        Step(agent, [], ["run", "--shape", "agent", "--arm", agent, *common, "--model", model, "--wire", "anthropic",
+                         "--concurrency", n, *out(agent)]),
+        Step(code, [], ["harness", "--harness", "claude-code", "--arm", code, *common, "--model", model, "--hosted",
+                        *out(code)]),
+    ]  # fmt: skip
+
+
 def server_argv(c: Config, s: Server) -> list[str]:
     device = ["--device", c.device] if c.device else []
     if c.thinking == 0:

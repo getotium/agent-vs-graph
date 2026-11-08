@@ -72,7 +72,7 @@ def publish(
     rows = {a: sum(1 for x in (dst / f"{a}.jsonl").read_text(encoding="utf-8").splitlines() if x.strip())
             for a in arms}  # fmt: skip
     # A harness is handed the whole file as one unit; the rest are one unit per item.
-    chunked = {(enrich.TASK, a): rows[a] for a in arms if a in harness.HARNESSES}
+    chunked = {(enrich.TASK, a): rows[a] for a in arms if harness.harness_of(a)}
     groups = report.group(ledger.read([dst / "ledger.jsonl"]), chunked)
     md = report.render(
         groups,
@@ -120,7 +120,7 @@ def shape(arm: str) -> str:
         return "Workflow graph; every step on one model"
     if arm.startswith("agent-"):
         return "One tool-calling agent per item"
-    if arm in harness.HARNESSES:
+    if harness.harness_of(arm):
         return "Agent harness handed the whole input file"
     return "–"
 

@@ -40,14 +40,18 @@ class Group:
     def billed(self, price: Price) -> tuple[dict[str, list[Record]], int]:
         """The units' records as the price's provider would bill them: its cache rule replayed
         over the recorded prompts (the local server's cache hits are dropped), and how many
-        records had no prompt shape to replay. Without a cache rule, every prompt token is new."""
-        recs = self.records
+        records had no prompt shape to replay. Without a cache rule, every prompt token is new.
+        Requests the priced model answered itself are taken as recorded: the vendor counted them,
+        cache reads and writes included, and that count is the bill."""
+        own = [r for r in self.records if _billed_by(r, price)]
+        rest = [r for r in self.records if not _billed_by(r, price)]
+        unknown = 0
         if price.cache is None:
-            billed, unknown = [replace(r, input=r.prompt, cache_read=0, cache_write=0) for r in recs], 0
-        else:
-            billed, unknown = cache.replay(recs, price.cache)
+            rest = [replace(r, input=r.prompt, cache_read=0, cache_write=0) for r in rest]
+        elif rest:
+            rest, unknown = cache.replay(rest, price.cache)
         units: dict[str, list[Record]] = defaultdict(list)
-        for r in billed:
+        for r in own + rest:
             units[r.item].append(r)
         return units, unknown
 
@@ -71,6 +75,12 @@ class Group:
         recs = [r for rs in units.values() for r in rs]
         prompt = sum(r.prompt for r in recs)
         return sum(r.cache_read for r in recs) / prompt if prompt else 0.0
+
+
+def _billed_by(r: Record, price: Price) -> bool:
+    """Whether the request was answered by the priced model itself, so its recorded usage is the
+    vendor's own bill rather than a local model's tokens to be priced as if."""
+    return r.model == price.id or r.model.startswith(price.id + "-")
 
 
 def group(records: Iterable[Record], items: dict[tuple[str, str], int] | None = None) -> list[Group]:
@@ -263,6 +273,10 @@ def render(
                         f"{c.ttl_s / 60:g}-minute lifetime.")  # fmt: skip
             else:
                 src += " No prompt cache."
+            own = sum(_billed_by(r, price) for g in tg for r in g.records)
+            if own:
+                src += (f" {own:,} requests were answered by {price.id} itself and are priced as {price.vendor} "
+                        "counted them, cache included, not replayed.")  # fmt: skip
             unknown = sum(g.billed(price)[1] for g in tg)
             if unknown:
                 src += f" {unknown:,} requests had no recorded prompt shape and are priced as all new input."

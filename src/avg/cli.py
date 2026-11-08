@@ -6,6 +6,7 @@ avg data    build a task's input file from a public dataset
 avg run     run one arm of a task through the meter
 avg harness run an agent harness (Claude Code, Hermes Agent) on the task as files
 avg serial  run every arm one after another on local models, one model loaded at a time
+avg hosted  run the arms against a hosted Anthropic model (the key from ANTHROPIC_API_KEY)
 avg device  print llama-server's --device flag for the configured GPU (local.toml)
 avg score   score arms' results against the gold answers
 avg report  price a ledger and print the Markdown report
@@ -17,6 +18,7 @@ from __future__ import annotations
 import argparse
 import asyncio
 import json
+import os
 import sys
 import tempfile
 import time
@@ -25,7 +27,7 @@ from pathlib import Path
 import aiohttp
 from aiohttp import web
 
-from . import config, data, harness, ledger, meter, paired, prices, publish, report, serial, stub
+from . import config, data, harness, ledger, llm, meter, paired, prices, publish, report, serial, stub
 from .llm import Client, InfraError
 from .scores import score_files
 from .tasks import enrich
@@ -58,7 +60,11 @@ async def _run(a: argparse.Namespace, out) -> list[dict]:
     items = enrich.load(a.items)[: a.limit or None]
     timeout = aiohttp.ClientTimeout(total=None, sock_read=900)
     async with aiohttp.ClientSession(timeout=timeout) as session:
-        client = Client(session, a.meter, a.run)
+        # A hosted graph marks only its shared system prompt for caching: each step's request ends
+        # in one item's listing, so caching the tail would pay the write premium for nothing. An
+        # agent also caches its growing conversation, which its next turn re-sends.
+        cache = "system" if a.shape == "graph" else "conversation"
+        client = Client(session, a.meter, a.run, wire=a.wire, api_key=_key(a.wire), cache=cache)
         if a.shape == "graph":
             models = enrich.Models(small=a.small or a.model, large=a.large or a.model)
             reasons: dict[str, str] = {}
@@ -75,6 +81,17 @@ async def _run(a: argparse.Namespace, out) -> list[dict]:
 
         records, outcomes = await enrich.agents(client, a.arm, items, a.model, a.concurrency, a.max_turns, done)
         return [row(it, outcomes[it.id], records.get(it.id)) for it in items]
+
+
+def _key(wire: str) -> str:
+    """The Anthropic API key for a hosted run, from the environment only; never from a flag, so it
+    stays out of process listings and shell history."""
+    if wire != "anthropic":
+        return ""
+    key = os.environ.get(llm.KEY_ENV, "")
+    if not key:
+        raise SystemExit(f"--wire anthropic needs {llm.KEY_ENV} (put it in .env.local; the Taskfile loads it)")
+    return key
 
 
 def _local() -> config.Local:
@@ -109,21 +126,42 @@ def _serial(a: argparse.Namespace) -> int:
     if a.only:
         wanted = set(a.only.split(","))
         steps = [s for s in steps if s.arm in wanted]
-    runs = Path("runs") / a.run
-    runs.mkdir(parents=True, exist_ok=True)
     # The conditions every arm in the run shares, kept beside its results. No machine names.
     meta = {"limit": a.limit, "slots": cfg.slots, "thinking": cfg.thinking, "max_tokens": Client.max_tokens,
             "llama_server": Path(cfg.llama_server).parent.name, "small": Path(small.gguf).name,
             "large": Path(large.gguf).name, "harness_ctx": cfg.large_harness.ctx,
             "code": serial.code_version()}  # fmt: skip
+    upstream = ["--openai", f"http://127.0.0.1:{large.port}",
+                "--route", f"{large.alias}=http://127.0.0.1:{large.port}",
+                "--route", f"{small.alias}=http://127.0.0.1:{small.port}"]  # fmt: skip
+    return _sequence(a, cfg, steps, meta, upstream)
+
+
+def _hosted(a: argparse.Namespace) -> int:
+    if not os.environ.get(llm.KEY_ENV):
+        raise SystemExit(f"hosted runs need {llm.KEY_ENV} (put it in .env.local; the Taskfile loads it)")
+    cfg = serial.hosted_config(a.run, a.limit, a.slots, a.port)
+    steps = serial.hosted_plan(cfg, a.model)
+    if a.only:
+        wanted = set(a.only.split(","))
+        steps = [s for s in steps if s.arm in wanted]
+    meta = {"limit": a.limit, "slots": cfg.slots, "thinking": 0, "max_tokens": Client.max_tokens,
+            "provider": "anthropic", "model": a.model, "anthropic_version": llm.ANTHROPIC_VERSION,
+            "code": serial.code_version()}  # fmt: skip
+    return _sequence(a, cfg, steps, meta, ["--openai", llm.ANTHROPIC_API, "--anthropic", llm.ANTHROPIC_API])
+
+
+def _sequence(a: argparse.Namespace, cfg: serial.Config, steps: list[serial.Step], meta: dict,
+              upstream: list[str]) -> int:  # fmt: skip
+    """Record the run's conditions, start the meter in front of `upstream`, run the steps in turn
+    and score what they wrote."""
+    runs = Path("runs") / a.run
+    runs.mkdir(parents=True, exist_ok=True)
     try:
         serial.check_meta(runs / "meta.json", meta)
     except ValueError as e:
         raise SystemExit(str(e)) from None
-    meter_argv = [sys.executable, "-m", "avg.cli", "meter", "--port", str(cfg.meter_port),
-                  "--openai", f"http://127.0.0.1:{large.port}",
-                  "--route", f"{large.alias}=http://127.0.0.1:{large.port}",
-                  "--route", f"{small.alias}=http://127.0.0.1:{small.port}",
+    meter_argv = [sys.executable, "-m", "avg.cli", "meter", "--port", str(cfg.meter_port), *upstream,
                   "--ledger", str(runs / "ledger.jsonl")]  # fmt: skip
     runner = serial.Runner()
     m = runner.start(meter_argv, runs / "meter.log")
@@ -170,6 +208,12 @@ def main(argv: list[str] | None = None) -> int:
     r.add_argument("--small", default="", help="graph: model for extract and describe")
     r.add_argument("--large", default="", help="graph: model for repairs")
     r.add_argument("--concurrency", type=int, default=4, help="requests in flight (the server's slots)")
+    r.add_argument(
+        "--wire",
+        choices=["openai", "anthropic"],
+        default="openai",
+        help="openai for local models; anthropic for a hosted Claude model (key from ANTHROPIC_API_KEY)",
+    )
     r.add_argument("--max-turns", type=int, default=8)
     r.add_argument("--out", type=Path, required=True, help="results file (.jsonl)")
 
@@ -187,6 +231,11 @@ def main(argv: list[str] | None = None) -> int:
     h.add_argument("--workspace", type=Path, help="default: a directory under the system temp dir, "
                    "outside any repository so no CLAUDE.md is picked up")  # fmt: skip
     h.add_argument("--out", type=Path, required=True, help="results file (.jsonl)")
+    h.add_argument(
+        "--hosted",
+        action="store_true",
+        help="claude-code against the hosted API: the meter forwards to Anthropic with ANTHROPIC_API_KEY",
+    )
 
     se = sub.add_parser("serial", help="run every arm one after another, one model server at a time")
     se.add_argument("--run", required=True)
@@ -200,6 +249,15 @@ def main(argv: list[str] | None = None) -> int:
     )
     se.add_argument("--replace", action="store_true", help="rerun arms that already have records in this run")
     se.add_argument("--slots", type=int, default=0, help="requests in flight for per-item arms (default: local.toml)")
+
+    ho = sub.add_parser("hosted", help="run the arms against a hosted Anthropic model, one after another")
+    ho.add_argument("--run", required=True)
+    ho.add_argument("--limit", type=int, default=50)
+    ho.add_argument("--only", default="", help="comma-separated arms to run (default: all)")
+    ho.add_argument("--model", default="claude-haiku-5-5")
+    ho.add_argument("--slots", type=int, default=4, help="requests in flight for per-item arms")
+    ho.add_argument("--port", type=int, default=8788, help="the meter's port (a local run may hold 8787)")
+    ho.add_argument("--replace", action="store_true", help="rerun arms that already have records in this run")
 
     sub.add_parser("device", help="print llama-server's --device flag for the configured GPU (empty if none)")
 
@@ -263,7 +321,12 @@ def main(argv: list[str] | None = None) -> int:
         ws = harness.workspace(root, items)
         base = f"{a.meter.rstrip('/')}/t/{a.run}/{arm}/{enrich.TASK}/all"
         make = harness.HARNESSES[a.harness]
-        inv = make(ws, base, a.model, a.max_turns, a.bin) if a.bin else make(ws, base, a.model, a.max_turns)
+        if a.hosted and a.harness != "claude-code":
+            raise SystemExit("--hosted runs claude-code only")
+        kw = {"binary": a.bin} if a.bin else {}
+        if a.hosted:
+            kw["api_key"] = _key("anthropic")
+        inv = make(ws, base, a.model, a.max_turns, **kw)
         started = time.monotonic()
         code = harness.run(inv, a.timeout)
         records = harness.collect(ws)
@@ -275,6 +338,8 @@ def main(argv: list[str] | None = None) -> int:
               f"{len(records)}/{len(items)} records written to {a.out}; workspace {ws}")  # fmt: skip
     elif a.cmd == "serial":
         return _serial(a)
+    elif a.cmd == "hosted":
+        return _hosted(a)
     elif a.cmd == "device":
         device = _device(_local())
         print(f"--device {device}" if device else "")

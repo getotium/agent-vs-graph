@@ -136,14 +136,19 @@ def _env(extra: dict[str, str]) -> dict[str, str]:
     return env
 
 
-def claude_code(root: Path, base_url: str, model: str, max_turns: int, binary: str = "claude") -> Invocation:
+def claude_code(
+    root: Path, base_url: str, model: str, max_turns: int, binary: str = "claude", api_key: str = ""
+) -> Invocation:
     """Claude Code headless (`claude -p`), every model it uses pointed at `model` through the meter,
-    including the small model it calls for side tasks: those requests are part of its cost."""
+    including the small model it calls for side tasks: those requests are part of its cost. With
+    `api_key` the meter forwards to the hosted API with it; otherwise to a local model, which
+    ignores the placeholder token."""
     home = root / ".home" / "claude"
     home.mkdir(parents=True, exist_ok=True)
+    auth = {"ANTHROPIC_API_KEY": api_key} if api_key else {"ANTHROPIC_AUTH_TOKEN": "local"}
     env = _env({
         "ANTHROPIC_BASE_URL": base_url,
-        "ANTHROPIC_AUTH_TOKEN": "local",  # the meter and llama-server ignore it; never a real key
+        **auth,
         "ANTHROPIC_MODEL": model,
         "ANTHROPIC_SMALL_FAST_MODEL": model,
         "ANTHROPIC_DEFAULT_HAIKU_MODEL": model,
@@ -170,6 +175,11 @@ def hermes(root: Path, base_url: str, model: str, max_turns: int, binary: str = 
 
 
 HARNESSES = {"claude-code": claude_code, "hermes": hermes}
+
+
+def harness_of(arm: str) -> str:
+    """The harness an arm runs ("claude-code" for claude-code-haiku), or "" for our own arms."""
+    return next((h for h in HARNESSES if arm == h or arm.startswith(h + "-")), "")
 
 
 def run(inv: Invocation, timeout_s: int) -> int:
