@@ -1,0 +1,24 @@
+# Defaults for running the arms on local models (avg serial, task serve:*).
+# Override any key for your machine in local.toml (gitignored); unknown keys are refused.
+
+# The pinned llama.cpp build (task llama).
+llama_server = "tools/llama-b12189/llama-server"
+
+# Which GPU llama.cpp uses: a device id or a piece of its name, as `llama-server --list-devices`
+# prints it. Empty leaves the choice to llama.cpp, which splits a model across every device it
+# finds. Pin it by name: the index order is the driver's, and on a machine with an integrated GPU
+# a low index can be the iGPU, which shares system memory with the desktop.
+device = ""
+
+small_gguf = "models/gemma-4-E4B_q4_0-it.gguf"
+large_gguf = "models/gemma-4-12b-it-qat-q4_0.gguf"
+
+# Context for the large model when a harness runs: room for its system prompt and the files it reads.
+harness_ctx = 65536
+
+# Requests in flight for the per-item arms (graph, agent), each with its own server slot and
+# context. More slots means more throughput and more GPU memory; harnesses always get one.
+slots = 1
+
+# Hermes Agent's executable, if installed into tools/ (otherwise "hermes" on PATH).
+hermes_bin = "hermes"

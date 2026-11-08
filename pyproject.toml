@@ -1,0 +1,32 @@
+[project]
+name = "agent-vs-graph"
+version = "0.1.0"
+description = "What the same work costs as an agent loop and as a workflow graph, measured at the wire."
+readme = "README.md"
+license = "Apache-2.0"
+requires-python = ">=3.11"
+dependencies = ["aiohttp>=3.9", "pyyaml>=6"]
+
+[project.optional-dependencies]
+dev = ["pytest>=8", "pytest-aiohttp>=1.0", "ruff>=0.6"]
+# Only for building task inputs from the source datasets (avg data); the built inputs are committed.
+data = ["pyarrow>=15"]
+
+[project.scripts]
+avg = "avg.cli:main"
+
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[tool.setuptools.packages.find]
+where = ["src"]
+
+[tool.pytest.ini_options]
+asyncio_mode = "auto"
+asyncio_default_fixture_loop_scope = "function"
+testpaths = ["tests"]
+
+[tool.ruff]
+line-length = 120
+src = ["src", "tests"]

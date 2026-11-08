@@ -1,0 +1,68 @@
+# USD per million tokens. Every entry names the page it came from and the day it was checked.
+# Pricing the benchmark's token counts as a model answers "what would this traffic cost there";
+# it does not claim that model would have needed the same tokens or done the work as well.
+#
+# Fields: input, output, cache_read (null: no cache discount), cache_write (null: input rate),
+# batch_discount (applied to every token class), batch_only (the listed rate is already the
+# batch price and there is no real-time option), long_prompt (rates for a request whose whole
+# prompt is over `over` tokens), verify (why a number is not confirmed from the vendor's page),
+# cache (how the provider's prompt cache works, required with a cache rate: mode auto caches every
+# prefix it sees, mode marked only what the caller marks; min_tokens, ttl_s, step_tokens). The
+# report replays each arm's recorded prompts against the cache rule; see src/avg/cache.py.
+prices:
+  - id: claude-haiku-5-5
+    vendor: Anthropic
+    source: https://platform.claude.com/docs/en/about-claude/pricing
+    checked: 2026-11-06
+    input: 0.10
+    output: 0.50
+    cache_read: 0.01
+    cache_write: 0.125 # 5-minute cache; the 1-hour cache writes at 0.20
+    cache:
+      mode: marked # cache_control on the prefix, or top-level automatic caching
+      min_tokens: 512 # Claude Haiku 5.5's minimum cacheable prompt
+      ttl_s: 300
+    batch_discount: 0.5
+    long_prompt:
+      over: 100000
+      input: 0.50
+      output: 2.50
+      cache_read: 0.05
+      cache_write: 0.625
+
+  - id: gpt-6-luna
+    vendor: OpenAI
+    source: https://openai.com/api/pricing/
+    checked: 2026-10-28
+    input: 0.10
+    output: 0.50
+    cache_read: 0.01
+    cache:
+      mode: auto
+      min_tokens: 1024
+      ttl_s: 300
+      step_tokens: 128
+    batch_discount: 0.5
+    verify: >-
+      OpenAI's pricing page refuses automated fetches. Input and output are as recorded on
+      getotium.ai's rate card (2026-10-28); the cached rate assumes OpenAI's usual 10% of input,
+      and the cache rule (automatic from 1,024 tokens in 128-token steps, about 5 minutes idle)
+      is from OpenAI's prompt caching guide as last read, not re-checked. Check both by hand
+      before publishing.
+
+  - id: otium-small
+    vendor: Otium
+    source: https://getotium.ai/pricing
+    checked: 2026-10-28
+    input: 0.048
+    output: 0.24
+    cache_read: 0 # cached input is free
+    cache:
+      mode: auto # vLLM prefix caching on the worker that serves the request
+      min_tokens: 16 # one vLLM block
+      ttl_s: 300
+    batch_only: true
+    notes:
+      - The Standard deadline tier. Otium runs batch work only, so it has no real-time price.
+      - The cache is replayed as one worker's prefix cache over the whole arm, an upper bound when a
+        batch spreads over several workers.

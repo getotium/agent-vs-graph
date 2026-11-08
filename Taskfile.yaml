@@ -1,0 +1,118 @@
+version: "3"
+
+vars:
+  PY: '{{if eq OS "windows"}}.venv/Scripts/python{{else}}.venv/bin/python{{end}}'
+  # Pinned: Google's own QAT GGUFs at fixed revisions, checked by SHA-256 after download.
+  HF: https://huggingface.co/google
+  M12B_FILE: gemma-4-12b-it-qat-q4_0.gguf
+  M12B_URL: "{{.HF}}/gemma-4-12B-it-qat-q4_0-gguf/resolve/29d097773436b69ff9feafd636ab4cf873786537/gemma-4-12b-it-qat-q4_0.gguf"
+  M12B_SHA: 93567e57a8fe10b23569b9d9ec38cd005deedf71e29477c421a4b83f418a538b
+  ME4B_FILE: gemma-4-E4B_q4_0-it.gguf
+  ME4B_URL: "{{.HF}}/gemma-4-E4B-it-qat-q4_0-gguf/resolve/4b4a2c1d584be7264f87aac328a1bc739ce81b6c/gemma-4-E4B_q4_0-it.gguf"
+  ME4B_SHA: 676c35070db6dbe52f93e9c864ee0fba4eddea94b9c875d9cb10daff453fbaee
+  # llama.cpp, pinned. The Windows Vulkan build; on Linux build or download the matching release
+  # and set LLAMA_SERVER.
+  LLAMA_BUILD: b12189
+  LLAMA_ZIP: llama-b12189-bin-win-vulkan-x64.zip
+  LLAMA_SHA: 9d56405579492423833cdde94cf46cae15d38333f585f3957cafebfc6fb0e182
+  LLAMA_SERVER: '{{.LLAMA_SERVER | default (printf "tools/llama-%s/llama-server" .LLAMA_BUILD)}}'
+
+tasks:
+  setup:
+    desc: Create the virtualenv and install the benchmark with its dev tools
+    cmds:
+      - python -m venv .venv
+      - "{{.PY}} -m pip install -q --upgrade pip"
+      - "{{.PY}} -m pip install -q -e '.[dev]'"
+
+  test:
+    desc: Run the tests (no network, no GPU, no API key)
+    cmds:
+      - "{{.PY}} -m pytest -q {{.CLI_ARGS}}"
+
+  lint:
+    desc: Lint and check formatting
+    cmds:
+      - "{{.PY}} -m ruff check ."
+      - "{{.PY}} -m ruff format --check ."
+
+  fmt:
+    desc: Format the code
+    cmds:
+      - "{{.PY}} -m ruff format ."
+      - "{{.PY}} -m ruff check --fix ."
+
+  check:
+    desc: Everything CI runs
+    cmds:
+      - task: lint
+      - task: test
+
+  meter:
+    desc: "Run the metering proxy (UPSTREAM=http://127.0.0.1:8080 by default; ANTHROPIC= for a separate Messages upstream)"
+    cmds:
+      - "{{.PY}} -m avg.cli meter --openai {{.UPSTREAM | default \"http://127.0.0.1:8080\"}} {{if .ANTHROPIC}}--anthropic {{.ANTHROPIC}}{{end}} --ledger {{.LEDGER | default \"runs/ledger.jsonl\"}}"
+
+  stub:
+    desc: Run the stand-in model server on :8080
+    cmds:
+      - "{{.PY}} -m avg.cli stub"
+
+  data:
+    desc: "Rebuild data/enrich/items.jsonl from the ESCI product catalog (1.1 GB download; the built file is committed)"
+    cmds:
+      - "{{.PY}} -m pip install -q -e '.[data]'"
+      - mkdir -p data/raw
+      - test -f data/raw/esci-products.parquet || curl -fsSL -o data/raw/esci-products.parquet https://github.com/amazon-science/esci-data/raw/main/shopping_queries_dataset/shopping_queries_dataset_products.parquet
+      - "{{.PY}} -m avg.cli data data/raw/esci-products.parquet --n 1000 --seed 1"
+
+  models:
+    desc: Download the two Gemma 4 GGUFs (12 GB) and check their SHA-256
+    cmds:
+      - mkdir -p models
+      - test -f models/{{.M12B_FILE}} || curl -fsSL -o models/{{.M12B_FILE}} {{.M12B_URL}}
+      - test -f models/{{.ME4B_FILE}} || curl -fsSL -o models/{{.ME4B_FILE}} {{.ME4B_URL}}
+      - echo "{{.M12B_SHA}}  models/{{.M12B_FILE}}" | sha256sum -c -
+      - echo "{{.ME4B_SHA}}  models/{{.ME4B_FILE}}" | sha256sum -c -
+
+  llama:
+    desc: Download the pinned llama.cpp Windows Vulkan build into tools/
+    cmds:
+      - mkdir -p tools
+      - test -f tools/{{.LLAMA_ZIP}} || curl -fsSL -o tools/{{.LLAMA_ZIP}} https://github.com/ggml-org/llama.cpp/releases/download/{{.LLAMA_BUILD}}/{{.LLAMA_ZIP}}
+      - echo "{{.LLAMA_SHA}}  tools/{{.LLAMA_ZIP}}" | sha256sum -c -
+      - unzip -q -o tools/{{.LLAMA_ZIP}} -d tools/llama-{{.LLAMA_BUILD}}
+
+  serve:12b:
+    desc: "Serve Gemma 4 12B on :8081 (SLOTS=4 CTX=32768: CTX is shared by the slots; a harness wants SLOTS=1 CTX=65536)"
+    cmds:
+      - "{{.LLAMA_SERVER}} -m models/{{.M12B_FILE}} --alias gemma-4-12b $({{.PY}} -m avg.cli device) -ngl 99 --jinja -np {{.SLOTS | default 4}} -c {{.CTX | default 32768}} --host 127.0.0.1 --port 8081"
+
+  serve:e4b:
+    desc: "Serve Gemma 4 E4B on :8082 (SLOTS, CTX as for serve:12b)"
+    cmds:
+      - "{{.LLAMA_SERVER}} -m models/{{.ME4B_FILE}} --alias gemma-4-e4b $({{.PY}} -m avg.cli device) -ngl 99 --jinja -np {{.SLOTS | default 4}} -c {{.CTX | default 32768}} --host 127.0.0.1 --port 8082"
+
+  meter:local:
+    desc: "The meter in front of both local models: gemma-4-12b on :8081, gemma-4-e4b on :8082 (LEDGER=runs/<run>/ledger.jsonl)"
+    cmds:
+      - "{{.PY}} -m avg.cli meter --openai http://127.0.0.1:8081 --route gemma-4-12b=http://127.0.0.1:8081 --route gemma-4-e4b=http://127.0.0.1:8082 --ledger {{.LEDGER | default \"runs/ledger.jsonl\"}}"
+
+  serial:
+    desc: "Every task 1 arm, one after another, one model loaded at a time (RUN=name LIMIT=20 ONLY=arm,arm SLOTS=n REPLACE=1 THINKING=n)"
+    cmds:
+      - "{{.PY}} -m avg.cli serial --run {{.RUN}} --limit {{.LIMIT | default 20}} {{if .SLOTS}}--slots {{.SLOTS}}{{end}} {{if .REPLACE}}--replace{{end}} {{if .THINKING}}--thinking {{.THINKING}}{{end}} {{if .ONLY}}--only {{.ONLY}}{{end}}"
+    requires:
+      vars: [RUN]
+
+  publish:
+    desc: "Copy a finished run to results/ with its scores and report (RUN=name; CODE=commit for a run that predates recording it)"
+    cmds:
+      - "{{.PY}} -m avg.cli publish {{.RUN}} {{if .CODE}}--code {{.CODE}}{{end}}"
+    requires:
+      vars: [RUN]
+
+  report:
+    desc: "Price a ledger (LEDGER=runs/ledger.jsonl) and print the report"
+    cmds:
+      - "{{.PY}} -m avg.cli report {{.LEDGER | default \"runs/ledger.jsonl\"}} {{.CLI_ARGS}}"
