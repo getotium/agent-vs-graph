@@ -58,8 +58,10 @@ def test_publish_copies_what_a_reader_needs_and_nothing_else(tree):
 
 def test_report_carries_conditions_scores_and_the_paired_comparison(tree):
     md = (run_publish(tree).path / "report.md").read_text(encoding="utf-8")
-    assert md.startswith("# Run r1\n\nConditions: limit 4,")
-    assert "code abc123def456" in md
+    assert md.startswith("# Run r1\n\nOne run of [agent-vs-graph](../../README.md)")
+    assert "| code | abc123def456 | the commit of this repo the run used |" in md
+    assert "| graph-12b | Workflow graph; every step on one model | m |" in md, "each arm's shape and model"
+    assert "(../../docs/reading-reports.md#price-tables)" in md, "every table links to its column definitions"
     assert "| agent-12b | 4 | 50% |" in md, "the scores table"
     assert "### Graph against agent, item by item" in md
     assert "| graph-12b | agent-12b | 4 | 2 | 0 | +50.0 pts" in md

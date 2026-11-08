@@ -7,6 +7,9 @@ shape and never its text), one `<arm>.jsonl` per arm (each item's output), `scor
 `task publish RUN=<run>` from the run's scratch folder, or price the ledger yourself with
 `avg report results/<run>/ledger.jsonl --scores results/<run>/scores.json`.
 
+What every table and column in a report means: [docs/reading-reports.md](../docs/reading-reports.md).
+Why the benchmark measures these things: [docs/design.md](../docs/design.md).
+
 The outputs are written from listings in Amazon's Shopping Queries Dataset (ESCI), Apache-2.0;
 see [data/enrich/README.md](../data/enrich/README.md) for the attribution.
 

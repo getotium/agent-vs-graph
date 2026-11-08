@@ -83,14 +83,106 @@ def publish(
         success={tuple(k.split(":", 1)): v["succeeded"] / v["items"] for k, v in counts.items()},
         passed={tuple(k.split(":", 1)): v["passed"] for k, v in counts.items()},
         pairs=paired.default_pairs(set(arms)),
+        guide=GUIDE,
     )
-    title, body = md.split("\n", 1)
-    conditions = ", ".join(f"{k} {v}" for k, v in meta.items() if k != "code_note")
-    head = [title, "", f"Conditions: {conditions}.", "", "## Scores", "", table,
-            "Valid passes the shared validator; success is valid with the right brand.", ""]  # fmt: skip
+    _, body = md.split("\n", 1)
+    head = context(run, meta, groups, table)
     (dst / "report.md").write_text("\n".join(head) + body, encoding="utf-8", newline="\n")
     index(results)
     return Published(dst, arms)
+
+
+# Links from results/<run>/report.md back into the repo.
+README, DESIGN, GUIDE = "../../README.md", "../../docs/design.md", "../../docs/reading-reports.md"
+
+TASKS = {
+    enrich.TASK: "product enrichment: each item is a product listing, to be turned into a validated catalog record"
+}
+
+CONDITIONS = {
+    "limit": "items in the run, the first N of the task's input file",
+    "slots": "requests a per-item arm keeps in flight at once; changes speed, not tokens",
+    "thinking": "0: no thinking phase; N: up to N thinking tokens per reply",
+    "max_tokens": "the cap on one reply, thinking included",
+    "llama_server": "the llama.cpp build that served the models",
+    "small": "the small model",
+    "large": "the large model",
+    "harness_ctx": "context window for the whole-file harnesses",
+    "code": "the commit of this repo the run used",
+}
+
+
+def shape(arm: str) -> str:
+    """What an arm is, from its name (see docs/reading-reports.md#arms)."""
+    if arm == "graph":
+        return "Workflow graph; easy steps on the small model, repairs on the large"
+    if arm.startswith("graph-"):
+        return "Workflow graph; every step on one model"
+    if arm.startswith("agent-"):
+        return "One tool-calling agent per item"
+    if arm in harness.HARNESSES:
+        return "Agent harness handed the whole input file"
+    return "–"
+
+
+def context(run: str, meta: dict, groups: list[report.Group], scores_table: str) -> list[str]:
+    """The top of a published report: what the run is, its arms and conditions, how to read the
+    numbers, and the scores. Facts and definitions only; what they mean is for the reader."""
+    tasks = sorted({g.task for g in groups})
+    what = "; ".join(f"`{t}`, {TASKS.get(t, 'see the README')}" for t in tasks)
+    out = [
+        f"# Run {run}",
+        "",
+        (
+            f"One run of [agent-vs-graph]({README}), which measures what the same job costs when a fixed workflow graph "
+            f"does it and when agent loops do. Task: {what}. The first {meta.get('limit', 'N')} items were given to "
+            "every arm below. Every model request was metered; costs are those tokens priced afterwards at each "
+            "vendor's published rates. This page is generated from the files beside it by `avg publish` and not "
+            "edited by hand."
+        ),
+        "",
+        (
+            f"Read more: [how to read this report]({GUIDE}) · [why it is measured this way]({DESIGN}) · "
+            "[all published runs](../README.md)"
+        ),
+        "",
+        "## In brief",
+        "",
+        "- **Success** is a record that passes the shared validator and names the right brand.",
+        (
+            "- **Costs** are per item, as each vendor would bill the run's tokens. The run itself was local: token "
+            "counts are the local model's, so they compare arms like for like rather than quote a hosted bill."
+        ),
+        "- **Batch** prices apply only to graph arms; an agent's requests wait on each other's answers.",
+        "- **Ranges** in brackets are 90% intervals on the average, from resampling the items.",
+        "- **Graph against agent** puts the same model in both shapes side by side, item by item.",
+        "",
+        "## Arms",
+        "",
+        "| Arm | Shape | Model |",
+        "| --- | --- | --- |",
+    ]
+    for g in groups:
+        models = ", ".join(sorted({r.model for r in g.records}))
+        out.append(f"| {g.arm} | {shape(g.arm)} | {models} |")
+    out += ["", "## Conditions", "", "| Setting | Value | Meaning |", "| --- | --- | --- |"]
+    for k, v in meta.items():
+        if k != "code_note":
+            out.append(f"| {k} | {v} | {CONDITIONS.get(k, '')} |")
+    if meta.get("code_note"):
+        out += ["", f"On `code`: {meta['code_note']}."]
+    out += [
+        "",
+        "## Scores",
+        "",
+        (
+            "How often each arm's output was right, against the catalog's own fields. Columns: "
+            f"[reading a report]({GUIDE}#scores)."
+        ),
+        "",
+        scores_table,
+    ]
+    return out
 
 
 INDEX_HEAD = """# Published runs
@@ -101,6 +193,9 @@ shape and never its text), one `<arm>.jsonl` per arm (each item's output), `scor
 `report.md`. The report is generated by `avg publish` and never edited by hand; rerun
 `task publish RUN=<run>` from the run's scratch folder, or price the ledger yourself with
 `avg report results/<run>/ledger.jsonl --scores results/<run>/scores.json`.
+
+What every table and column in a report means: [docs/reading-reports.md](../docs/reading-reports.md).
+Why the benchmark measures these things: [docs/design.md](../docs/design.md).
 
 The outputs are written from listings in Amazon's Shopping Queries Dataset (ESCI), Apache-2.0;
 see [data/enrich/README.md](../data/enrich/README.md) for the attribution.

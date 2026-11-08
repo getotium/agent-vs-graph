@@ -119,12 +119,18 @@ def _pct(x: float) -> str:
     return f"{x * 100:+.1f} pts"
 
 
+def _about(text: str, guide: str, anchor: str) -> list[str]:
+    """One plain sentence on what the next table shows, and where its columns are defined."""
+    return [text + (f" Columns: [reading a report]({guide}#{anchor})." if guide else ""), ""]
+
+
 def _paired(
     tg: list[Group],
     prices: list[Price],
     batchable: set[str],
     passed: dict[tuple[str, str], dict[str, bool]],
     pairs: list[tuple[str, str]],
+    guide: str = "",
 ) -> list[str]:
     """The graph-against-agent tables for one task: success, then cost under each price."""
     by_arm = {g.arm: g for g in tg}
@@ -134,6 +140,8 @@ def _paired(
     if not usable:
         return []
     out = ["### Graph against agent, item by item", ""]
+    out += _about("Each graph arm next to the agent on the same model, so the two differ only in shape, compared on "
+                  "the items both ran.", guide, "graph-against-agent-item-by-item")  # fmt: skip
     scored = [(a, b) for a, b in usable if (task, a) in passed and (task, b) in passed]
     if scored:
         out += [
@@ -182,16 +190,20 @@ def render(
     success: dict[tuple[str, str], float] | None = None,
     passed: dict[tuple[str, str], dict[str, bool]] | None = None,
     pairs: list[tuple[str, str]] | None = None,
+    guide: str = "",
 ) -> str:
     """`success` is each (task, arm)'s success rate from `avg score`; with it, each row also shows
     the cost per 1,000 successful items, so an arm cannot look cheap by failing. `pairs` are
     (graph, agent) arms to compare item by item, on success too when `passed` has both arms'
-    per-item results."""
+    per-item results. `guide` is a link to docs/reading-reports.md from where the report will be
+    read; with it, each table links to its column definitions."""
     success = success or {}
     out: list[str] = [f"# {title}", ""]
     for task in sorted({g.task for g in groups}):
         tg = [g for g in groups if g.task == task]
         out += [f"## Task: {task}", "", "### Tokens per item", ""]
+        out += _about("What each arm sent to the model and got back, per item, counted at the wire.", guide,
+                      "tokens-per-item")  # fmt: skip
         out += [
             "| Arm | Items | Requests / item | Prompt | Output | Refused requests |",
             "| --- | ---: | ---: | ---: | ---: | ---: |",
@@ -213,6 +225,8 @@ def render(
             if not any(_modes(g.arm, price, batchable) for g in tg):
                 continue  # e.g. a batch-only price and no batchable arm on this task
             out += [f"### Priced as {price.id} ({price.vendor})", ""]
+            out += _about(f"What the run's tokens would cost at {price.vendor}'s published prices for {price.id}, per "
+                          "item and projected to monthly volumes.", guide, "price-tables")  # fmt: skip
             vol_cols = " | ".join(f"{v:,} / month" for v in volumes)
             out += [
                 (
@@ -255,7 +269,7 @@ def render(
             if price.verify:
                 src += f" **Unverified:** {price.verify}"
             out += ["", src, ""]
-        out += _paired(tg, prices, batchable, passed or {}, pairs or [])
+        out += _paired(tg, prices, batchable, passed or {}, pairs or [], guide)
         not_batch = sorted({g.arm for g in tg} - batchable)
         if not_batch:
             out += [

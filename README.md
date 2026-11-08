@@ -13,6 +13,7 @@ line is and how much it is worth, so you can pick the right shape for your own w
 > [Plan](#plan)). Small development runs are not results and are not published.
 
 Why it is built this way, and the decisions behind it: [docs/design.md](docs/design.md).
+What a published report's tables and columns mean: [docs/reading-reports.md](docs/reading-reports.md).
 
 ## What is compared
 

@@ -1,8 +1,45 @@
 # Run big-off
 
-Conditions: limit 500, slots 4, thinking 0, max_tokens 4096, llama_server llama-b12189, small gemma-4-E4B_q4_0-it.gguf, large gemma-4-12b-it-qat-q4_0.gguf, harness_ctx 65536, code 129d8922befc.
+One run of [agent-vs-graph](../../README.md), which measures what the same job costs when a fixed workflow graph does it and when agent loops do. Task: `enrich`, product enrichment: each item is a product listing, to be turned into a validated catalog record. The first 500 items were given to every arm below. Every model request was metered; costs are those tokens priced afterwards at each vendor's published rates. This page is generated from the files beside it by `avg publish` and not edited by hand.
+
+Read more: [how to read this report](../../docs/reading-reports.md) · [why it is measured this way](../../docs/design.md) · [all published runs](../README.md)
+
+## In brief
+
+- **Success** is a record that passes the shared validator and names the right brand.
+- **Costs** are per item, as each vendor would bill the run's tokens. The run itself was local: token counts are the local model's, so they compare arms like for like rather than quote a hosted bill.
+- **Batch** prices apply only to graph arms; an agent's requests wait on each other's answers.
+- **Ranges** in brackets are 90% intervals on the average, from resampling the items.
+- **Graph against agent** puts the same model in both shapes side by side, item by item.
+
+## Arms
+
+| Arm | Shape | Model |
+| --- | --- | --- |
+| agent-12b | One tool-calling agent per item | gemma-4-12b |
+| agent-e4b | One tool-calling agent per item | gemma-4-e4b |
+| graph | Workflow graph; easy steps on the small model, repairs on the large | gemma-4-12b, gemma-4-e4b |
+| graph-12b | Workflow graph; every step on one model | gemma-4-12b |
+
+## Conditions
+
+| Setting | Value | Meaning |
+| --- | --- | --- |
+| limit | 500 | items in the run, the first N of the task's input file |
+| slots | 4 | requests a per-item arm keeps in flight at once; changes speed, not tokens |
+| thinking | 0 | 0: no thinking phase; N: up to N thinking tokens per reply |
+| max_tokens | 4096 | the cap on one reply, thinking included |
+| llama_server | llama-b12189 | the llama.cpp build that served the models |
+| small | gemma-4-E4B_q4_0-it.gguf | the small model |
+| large | gemma-4-12b-it-qat-q4_0.gguf | the large model |
+| harness_ctx | 65536 | context window for the whole-file harnesses |
+| code | 129d8922befc | the commit of this repo the run used |
+
+On `code`: recorded at publication: the run started on a pre-release commit that was squashed into this one; the code that runs and scores the arms is identical.
 
 ## Scores
+
+How often each arm's output was right, against the catalog's own fields. Columns: [reading a report](../../docs/reading-reports.md#scores).
 
 | Arm | Items | Valid | Brand | Color | Success |
 | --- | ---: | ---: | ---: | ---: | ---: |
@@ -11,11 +48,11 @@ Conditions: limit 500, slots 4, thinking 0, max_tokens 4096, llama_server llama-
 | graph | 500 | 100% | 81% | 61% | 81% |
 | graph-12b | 500 | 100% | 94% | 62% | 94% |
 
-Valid passes the shared validator; success is valid with the right brand.
-
 ## Task: enrich
 
 ### Tokens per item
+
+What each arm sent to the model and got back, per item, counted at the wire. Columns: [reading a report](../../docs/reading-reports.md#tokens-per-item).
 
 | Arm | Items | Requests / item | Prompt | Output | Refused requests |
 | --- | ---: | ---: | ---: | ---: | ---: |
@@ -30,6 +67,8 @@ requests are not priced: the server reports no usage for them.
 
 ### Priced as claude-haiku-5-5 (Anthropic)
 
+What the run's tokens would cost at Anthropic's published prices for claude-haiku-5-5, per item and projected to monthly volumes. Columns: [reading a report](../../docs/reading-reports.md#price-tables).
+
 | Arm | Mode | Cached | Success | Per 1,000 items | Per 1,000 successes | p95 item | 10,000 / month | 100,000 / month | 1,000,000 / month | Year at 1,000,000 / month |
 | --- | --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: |
 | agent-12b | real-time | 27% | 90% | $0.29 | $0.32 | $0.0004 | $2.92 ($2.86–$2.98) | $29.16 ($28.63–$29.75) | $291.64 ($286.31–$297.50) | $3,500 |
@@ -42,6 +81,8 @@ requests are not priced: the server reports no usage for them.
 Rates from https://platform.claude.com/docs/en/about-claude/pricing, checked 2026-11-06. Cache replayed as Anthropic's: prefixes marked where a later request reuses them (the best case), from 512 tokens, 5-minute lifetime.
 
 ### Priced as gpt-6-luna (OpenAI)
+
+What the run's tokens would cost at OpenAI's published prices for gpt-6-luna, per item and projected to monthly volumes. Columns: [reading a report](../../docs/reading-reports.md#price-tables).
 
 | Arm | Mode | Cached | Success | Per 1,000 items | Per 1,000 successes | p95 item | 10,000 / month | 100,000 / month | 1,000,000 / month | Year at 1,000,000 / month |
 | --- | --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: |
@@ -56,6 +97,8 @@ Rates from https://openai.com/api/pricing/, checked 2026-10-28. Cache replayed a
 
 ### Priced as otium-small (Otium)
 
+What the run's tokens would cost at Otium's published prices for otium-small, per item and projected to monthly volumes. Columns: [reading a report](../../docs/reading-reports.md#price-tables).
+
 | Arm | Mode | Cached | Success | Per 1,000 items | Per 1,000 successes | p95 item | 10,000 / month | 100,000 / month | 1,000,000 / month | Year at 1,000,000 / month |
 | --- | --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: |
 | graph | batch | 36% | 81% | $0.08 | $0.10 | $0.0001 | $0.80 ($0.78–$0.83) | $8.04 ($7.82–$8.27) | $80.41 ($78.19–$82.66) | $964.86 |
@@ -64,6 +107,8 @@ Rates from https://openai.com/api/pricing/, checked 2026-10-28. Cache replayed a
 Rates from https://getotium.ai/pricing, checked 2026-10-28. Cache replayed as Otium's: every prefix it sees, from 16 tokens, 5-minute lifetime.
 
 ### Graph against agent, item by item
+
+Each graph arm next to the agent on the same model, so the two differ only in shape, compared on the items both ran. Columns: [reading a report](../../docs/reading-reports.md#graph-against-agent-item-by-item).
 
 | Graph | Agent | Items | Only graph right | Only agent right | Success, graph − agent | p |
 | --- | --- | ---: | ---: | ---: | ---: | ---: |
