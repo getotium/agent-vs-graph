@@ -1,6 +1,7 @@
 """The serial runner: which servers each step gets, and that steps never overlap."""
 
 import sys
+from dataclasses import replace
 from pathlib import Path
 
 import pytest
@@ -25,6 +26,14 @@ def test_plan_loads_only_what_each_arm_needs():
         if s.argv[0] == "run":
             assert s.argv[s.argv.index("--concurrency") + 1] == "1", "one request in flight by default"
     assert steps["hermes"].argv[steps["hermes"].argv.index("--bin") + 1] == "/h/hermes"
+
+
+def test_the_lean_graph_runs_only_where_thinking_is_on():
+    assert "graph-12b-lean" not in {s.arm for s in serial.plan(CFG)}, "with thinking off it is the plain graph"
+    steps = {s.arm: s for s in serial.plan(replace(CFG, thinking=3072))}
+    lean = steps["graph-12b-lean"]
+    assert [s.alias for s in lean.servers] == ["large"]
+    assert lean.argv[lean.argv.index("--no-thinking") + 1] == "describe"
 
 
 def test_server_has_one_slot_on_the_chosen_device():

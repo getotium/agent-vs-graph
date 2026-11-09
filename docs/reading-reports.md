@@ -31,11 +31,12 @@ An arm's name says its shape and its model:
 | --- | --- |
 | `graph-<model>` | A workflow graph: fixed steps, each run over every item, every step on that model. |
 | `graph` | The same graph with the easy steps (extract, describe) on the small model and repairs on the large one. |
+| `graph-<model>-lean` | `graph-<model>` with thinking off for its describe step, in runs where thinking is on ([why](design.md#the-arms)). |
 | `agent-<model>` | One tool-calling agent per item on that model, deciding its own steps, with the validator as a tool. |
 | `claude-code`, `hermes` | A general-purpose agent harness handed the whole input file at once. |
 
 `graph-12b` and `agent-12b` differ only in shape, which is why the report compares them item by
-item.
+item; `graph-12b-lean` is compared with `agent-12b` too.
 
 ## Conditions
 
@@ -92,7 +93,7 @@ vendor's own page and says what to check.
 
 ## Graph against agent, item by item
 
-Each `graph-<model>` arm next to `agent-<model>`, over the items both ran.
+Each `graph-<model>` arm (and its lean variant) next to `agent-<model>`, over the items both ran.
 
 | Column | Meaning |
 | --- | --- |

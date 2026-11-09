@@ -68,7 +68,9 @@ async def _run(a: argparse.Namespace, out) -> list[dict]:
         if a.shape == "graph":
             models = enrich.Models(small=a.small or a.model, large=a.large or a.model)
             reasons: dict[str, str] = {}
-            records = await enrich.graph(client, a.arm, items, models, limit=a.concurrency, reasons=reasons)
+            quiet = frozenset(s for s in a.no_thinking.split(",") if s)
+            records = await enrich.graph(client, a.arm, items, models, limit=a.concurrency, reasons=reasons,
+                                         no_thinking=quiet)  # fmt: skip
             return [{"arm": a.arm, "id": it.id, "record": records.get(it.id), "reason": reasons.get(it.id, "")}
                     for it in items]  # fmt: skip
 
@@ -220,6 +222,12 @@ def main(argv: list[str] | None = None) -> int:
         choices=["off", "default"],
         default="off",
         help="anthropic: off sends thinking disabled; default leaves the model's own (local: set on the server)",
+    )
+    r.add_argument(
+        "--no-thinking",
+        default="",
+        metavar="STEP,STEP",
+        help=f"graph: steps run with thinking off whatever the run's condition ({', '.join(enrich.STEPS)})",
     )
     r.add_argument("--max-turns", type=int, default=8)
     r.add_argument("--out", type=Path, required=True, help="results file (.jsonl)")

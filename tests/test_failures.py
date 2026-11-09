@@ -67,7 +67,7 @@ class Scripted:
     def __init__(self, *replies):
         self.replies, self.seen = list(replies), []
 
-    async def chat(self, arm, task, item, model, messages, tools=None):
+    async def chat(self, arm, task, item, model, messages, tools=None, think=True):
         self.seen.append(list(messages))
         r = self.replies.pop(0)
         if isinstance(r, Exception):

@@ -135,17 +135,33 @@ async def _gather(limit: int, coros: Iterable):
     return await asyncio.gather(*(one(c) for c in coros))
 
 
+# The graph's model steps, by the names `graph(no_thinking=...)` takes.
+STEPS = ("extract", "repair", "describe")
+
+
 async def graph(
-    client: Client, arm: str, items: list[Item], models: Models, limit: int = 4, reasons: dict | None = None
+    client: Client,
+    arm: str,
+    items: list[Item],
+    models: Models,
+    limit: int = 4,
+    reasons: dict | None = None,
+    no_thinking: frozenset[str] = frozenset(),
 ) -> dict[str, dict]:
     """extract (small) → validate (code) → repair the failures (large) → describe (small) →
     validate → repair the failures again (large). Each step runs over every item before the
     next starts, which is what lets every model step be one batch. Returns id → record for the
-    items that came out valid; `reasons`, if given, gets why each other item dropped out."""
+    items that came out valid; `reasons`, if given, gets why each other item dropped out.
+    Steps named in `no_thinking` run with thinking off whatever the run's condition."""
+    if unknown := no_thinking - set(STEPS):
+        raise ValueError(f"no such graph step: {', '.join(sorted(unknown))}")
+    think = {s: s not in no_thinking for s in STEPS}
 
     async def extract(it: Item):
         msg = [{"role": "system", "content": EXTRACT}, {"role": "user", "content": it.listing()}]
-        return parse_json((await client.chat(arm, TASK, it.id, models.small, msg)).get("content"))
+        return parse_json(
+            (await client.chat(arm, TASK, it.id, models.small, msg, think=think["extract"])).get("content")
+        )
 
     async def repair(it: Item, record, errors: list[str]):
         msg = [
@@ -153,7 +169,9 @@ async def graph(
             {"role": "user", "content": f"{it.listing()}\n\nRecord:\n{json.dumps(record)}\n\nErrors:\n"
                                         + "\n".join(f"- {e}" for e in errors)},
         ]  # fmt: skip
-        return parse_json((await client.chat(arm, TASK, it.id, models.large, msg)).get("content"))
+        return parse_json(
+            (await client.chat(arm, TASK, it.id, models.large, msg, think=think["repair"])).get("content")
+        )
 
     async def describe(it: Item, record: dict):
         attrs = {k: record.get(k) for k in ("category", "brand", "color", "specs")}
@@ -161,7 +179,8 @@ async def graph(
             {"role": "system", "content": DESCRIBE},
             {"role": "user", "content": f"{it.listing()}\n\nAttributes:\n{json.dumps(attrs)}"},
         ]
-        return ((await client.chat(arm, TASK, it.id, models.small, msg)).get("content") or "").strip()
+        reply = await client.chat(arm, TASK, it.id, models.small, msg, think=think["describe"])
+        return (reply.get("content") or "").strip()
 
     by_id = {it.id: it for it in items}
     records: dict[str, object] = dict(

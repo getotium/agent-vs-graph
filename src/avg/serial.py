@@ -64,6 +64,12 @@ class Config:
     harnesses: list[str] = field(default_factory=lambda: ["claude-code", "hermes"])
 
 
+# The lean graph: the same graph with its describe step's thinking off. Chosen before it was run,
+# from where the thinking runs spent their tokens (the description, written from attributes the
+# graph has already settled), and run only where thinking is on: otherwise it is the plain graph.
+LEAN = ["--no-thinking", "describe"]
+
+
 def plan(c: Config) -> list[Step]:
     """The arms of task 1, in order."""
     small, large, n = replace(c.small, slots=c.slots), replace(c.large, slots=c.slots), str(c.slots)
@@ -77,6 +83,12 @@ def plan(c: Config) -> list[Step]:
         Step("graph-12b", [large],
              ["run", "--shape", "graph", "--arm", "graph-12b", *common, "--model", large.alias, "--concurrency", n,
               *out("graph-12b")]),
+    ]  # fmt: skip
+    if c.thinking != 0:
+        steps.append(Step("graph-12b-lean", [large],
+                          ["run", "--shape", "graph", "--arm", "graph-12b-lean", *common, "--model", large.alias,
+                           *LEAN, "--concurrency", n, *out("graph-12b-lean")]))  # fmt: skip
+    steps += [
         Step("agent-12b", [large],
              ["run", "--shape", "agent", "--arm", "agent-12b", *common, "--model", large.alias, "--concurrency", n,
               *out("agent-12b")]),
@@ -122,6 +134,9 @@ def hosted_plan(c: Config, model: str, thinking: str = "off", tag: str = "haiku"
                          "--concurrency", n, *out(agent)]),
     ]  # fmt: skip
     if thinking == "default":
+        steps.insert(1, Step(f"{graph}-lean", [], ["run", "--shape", "graph", "--arm", f"{graph}-lean", *common,
+                                                   "--model", model, *wire, *LEAN, "--concurrency", n,
+                                                   *out(f"{graph}-lean")]))  # fmt: skip
         steps.append(Step(code, [], ["harness", "--harness", "claude-code", "--arm", code, *common, "--model", model,
                                      "--hosted", *out(code)]))  # fmt: skip
     return steps

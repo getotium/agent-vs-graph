@@ -23,6 +23,16 @@ The same tasks, inputs, models and tools, scored the same way, run as:
 Arm names say the shape and the model: `graph-12b` and `agent-12b` run on the same model, so they
 differ only in shape; `graph` routes its easy steps to the small model and repairs to the large one.
 
+**The lean graph** (`graph-<model>-lean`) is the same graph with thinking off for its describe step,
+run beside the plain graph wherever thinking is on. Choosing per step is something a graph can do
+and an agent cannot: an agent decides everything in one conversation, so it thinks for all of it
+or none. The step was chosen before the variant was run, from where the first thinking runs spent
+their tokens. An agent thought once per item, writing the whole record in one turn; the graph
+thought in both its steps, and its describe step, which writes prose from attributes the graph has
+already settled, added about 860 thinking tokens per item on the 12B. Extract and repair keep their
+thinking, since that is where the brand is decided. It is a variant, not a replacement: the plain
+graph stays in every run, so the report shows what the choice changed.
+
 ## What should differ, and how each is measured
 
 1. **Re-reading.** An agent's turn N sends turns 1 to N−1 again, with its tool definitions; a

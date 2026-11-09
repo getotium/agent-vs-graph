@@ -56,5 +56,11 @@ def cost(a: dict[str, float], b: dict[str, float]) -> Projection:
 
 
 def default_pairs(arms: set[str]) -> list[tuple[str, str]]:
-    """Each agent-<model> arm against graph-<model>: the same model in both shapes."""
-    return [(f"graph-{a[6:]}", a) for a in sorted(arms) if a.startswith("agent-") and f"graph-{a[6:]}" in arms]
+    """Each agent-<model> arm against graph-<model> and its variants (graph-<model>-lean): the same
+    model in both shapes."""
+    out = []
+    for a in sorted(arms):
+        if a.startswith("agent-"):
+            g = f"graph-{a[6:]}"
+            out += [(x, a) for x in sorted(arms) if x == g or x.startswith(g + "-")]
+    return out

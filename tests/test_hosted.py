@@ -120,8 +120,33 @@ def test_claude_code_runs_only_where_its_thinking_matches_the_condition():
     off = serial.hosted_plan(cfg, "claude-haiku-5-5", "off")
     assert [s.arm for s in off] == ["graph-haiku", "agent-haiku"], "Claude Code cannot turn thinking off"
     shipped = serial.hosted_plan(cfg, "claude-haiku-5-5", "default")
-    assert [s.arm for s in shipped] == ["graph-haiku", "agent-haiku", "claude-code-haiku"]
+    assert [s.arm for s in shipped] == ["graph-haiku", "graph-haiku-lean", "agent-haiku", "claude-code-haiku"]
     assert shipped[0].argv[shipped[0].argv.index("--thinking") + 1] == "default"
+    lean = shipped[1].argv
+    assert lean[lean.index("--no-thinking") + 1] == "describe" and "--no-thinking" not in shipped[0].argv
+
+
+@pytest.mark.parametrize("wire,reply", [
+    ("anthropic", {"content": [{"type": "text", "text": "ok"}]}),
+    ("openai", {"choices": [{"message": {"role": "assistant", "content": "ok"}}]}),
+])  # fmt: skip
+async def test_one_request_can_turn_thinking_off(wire, reply):
+    api = FakeAPI(reply, reply)
+    s = await serve(api)
+    try:
+        async with aiohttp.ClientSession() as session:
+            client = Client(session, str(s.make_url("")).rstrip("/"), "r", wire=wire, api_key="k", thinking="default")
+            msgs = [{"role": "user", "content": "hi"}]
+            await client.chat("a", "t", "i", "m", msgs)
+            await client.chat("a", "t", "i", "m", msgs, think=False)
+    finally:
+        await s.close()
+    (_, _, thinks), (_, _, quiet) = api.requests
+    if wire == "anthropic":
+        assert "thinking" not in thinks and quiet["thinking"] == {"type": "disabled"}
+    else:
+        assert "chat_template_kwargs" not in thinks
+        assert quiet["chat_template_kwargs"] == {"enable_thinking": False}, "the template's switch, per request"
 
 
 def test_thinking_off_is_sent_and_the_default_is_left_alone():
@@ -151,7 +176,7 @@ def test_thinking_tokens_are_recorded_when_the_server_reports_them():
 def test_the_hosted_plan_needs_no_servers_and_never_carries_the_key():
     steps = serial.hosted_plan(serial.hosted_config("h1", 50, 4, 8788), "claude-haiku-5-5", "default")
     assert all(s.servers == [] for s in steps)
-    assert "--wire" in steps[0].argv and "--hosted" in steps[2].argv
+    assert "--wire" in steps[0].argv and "--hosted" in steps[-1].argv
     assert all("http://127.0.0.1:8788" in s.argv for s in steps), "its own meter port, clear of a local run's"
     assert not any(a.startswith("sk-") for s in steps for a in s.argv)
 

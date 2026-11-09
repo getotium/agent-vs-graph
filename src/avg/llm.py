@@ -80,16 +80,23 @@ class Client:
         model: str,
         messages: list[dict],
         tools: list[dict] | None = None,
+        think: bool = True,
     ) -> dict:
         """One request; returns the assistant message in OpenAI's shape. Locally, temperature 0 so
-        reruns are comparable; a hosted Anthropic model takes only its default sampling."""
+        reruns are comparable; a hosted Anthropic model takes only its default sampling. `think`
+        False turns thinking off for this request whatever the run's condition: a graph can choose
+        per step."""
         if self.wire == "anthropic":
-            body = to_anthropic(model, messages, tools, self.max_tokens, self.cache, self.thinking)
+            thinking = self.thinking if think else "off"
+            body = to_anthropic(model, messages, tools, self.max_tokens, self.cache, thinking)
             headers = {"x-api-key": self.api_key, "anthropic-version": ANTHROPIC_VERSION}
             return from_anthropic(await self._post(self.url(arm, task, item), body, headers))
         body = {"model": model, "messages": messages, "temperature": 0, "max_tokens": self.max_tokens}
         if tools:
             body["tools"] = tools
+        if not think:
+            # llama.cpp hands this to the chat template; Gemma 4's switches its thinking phase on it.
+            body["chat_template_kwargs"] = {"enable_thinking": False}
         data = await self._post(self.url(arm, task, item), body, {})
         try:
             return data["choices"][0]["message"]

@@ -45,3 +45,5 @@ def test_arms_with_no_items_in_common_are_refused():
 def test_default_pairs_match_the_model():
     arms = {"graph", "graph-12b", "agent-12b", "agent-e4b", "claude-code"}
     assert paired.default_pairs(arms) == [("graph-12b", "agent-12b")], "graph mixes models: no default partner"
+    lean = paired.default_pairs(arms | {"graph-12b-lean"})
+    assert lean == [("graph-12b", "agent-12b"), ("graph-12b-lean", "agent-12b")], "a variant meets the same agent"

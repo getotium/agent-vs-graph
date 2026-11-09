@@ -254,6 +254,30 @@ async def test_graph_repairs_only_the_failure_and_routes_by_size(rig):
     assert {(r.run, r.arm, r.task) for r in recs} == {("r1", "graph", "enrich")}
 
 
+class Listening:
+    """Passes each request on to a real client and notes which step it was and whether it thought."""
+
+    def __init__(self, client):
+        self.client, self.seen = client, []
+
+    async def chat(self, arm, task, item, model, messages, tools=None, think=True):
+        step = {enrich.EXTRACT: "extract", enrich.REPAIR: "repair", enrich.DESCRIBE: "describe"}[messages[0]["content"]]
+        self.seen.append((step, think))
+        return await self.client.chat(arm, task, item, model, messages, tools, think)
+
+
+async def test_the_lean_graph_turns_thinking_off_only_where_told(rig):
+    client, _ = await rig(graph_model, models=["small", "large"])
+    lean = Listening(client)
+    records = await enrich.graph(lean, "graph-lean", ITEMS, enrich.Models("small", "large"),
+                                 no_thinking=frozenset({"describe"}))  # fmt: skip
+    assert set(records) == {"p1", "p2"}, "the same records as the plain graph"
+    assert {s for s, think in lean.seen if not think} == {"describe"}
+    assert {s for s, think in lean.seen if think} == {"extract", "repair"}
+    with pytest.raises(ValueError, match="no such graph step: summarize"):
+        await enrich.graph(lean, "g", ITEMS, enrich.Models("small", "large"), no_thinking=frozenset({"summarize"}))
+
+
 async def test_agent_loops_until_submitted(rig):
     client, path = await rig(agent_model)
     records, outcomes = await enrich.agents(client, "agent", ITEMS, "m")
