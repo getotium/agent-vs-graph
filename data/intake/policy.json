@@ -1,0 +1,19 @@
+{
+  "excluded_brands": [
+    "ALTRA",
+    "Barbie",
+    "Breville",
+    "Frigidaire",
+    "Gold Toe",
+    "Marvel",
+    "Mkono",
+    "MoKo",
+    "Playtex",
+    "Romwe",
+    "Simple Houseware",
+    "The North Face"
+  ],
+  "excluded_kinds": [
+    "books"
+  ]
+}

@@ -59,6 +59,18 @@ rather than sentences copied from the listing, claiming nothing the listing does
 # record fails. Stating "at most half of its 5-word phrases" here sent Gemma 4 12B into counting
 # phrases while it thought: 8 of 10 first turns ran out the 4,096-token cap without answering.
 
+# Catalog intake's content: what a store page needs, written only for the items the store keeps.
+CONTENT_KEYS = {"seo_title", "meta_description", "long_description"}
+MAX_SEO_CHARS = 60
+MIN_META_CHARS, MAX_META_CHARS = 120, 160
+MIN_LONG_WORDS, MAX_LONG_WORDS = 120, 200
+
+CONTENT_SPEC = f"""A catalogued product's record also has its page content, three more keys:
+- "seo_title": the page title, at most {MAX_SEO_CHARS} characters, naming the brand and the product
+- "meta_description": the search snippet, {MIN_META_CHARS} to {MAX_META_CHARS} characters, one or two plain sentences
+- "long_description": the page's description, {MIN_LONG_WORDS} to {MAX_LONG_WORDS} words, in your own words rather \
+than sentences copied from the listing, claiming nothing the listing does not support"""
+
 
 def listing_text(product: dict) -> str:
     """The text a record is written from: a product's title, bullets and description."""
@@ -91,18 +103,21 @@ def cut_from(value: str, listing: str) -> bool:
     return False
 
 
-def validate(record: object, partial: bool = False, listing: str | None = None) -> list[str]:
+def validate(record: object, partial: bool = False, listing: str | None = None, content: bool = False) -> list[str]:
     """What is wrong with a record, as messages a model can act on; empty when it is valid.
     `partial` checks a record without its description (the graph writes that last). Given the
-    `listing` (see listing_text), it also checks that specs and description were not copied."""
+    `listing` (see listing_text), it also checks that specs and description were not copied.
+    `content` checks a catalog intake record, which also carries its page content (CONTENT_KEYS);
+    with `partial` too, neither the description nor the content is expected yet."""
     if not isinstance(record, dict):
         return ["the record must be a JSON object"]
-    want = KEYS - {"description"} if partial else KEYS
+    keys = KEYS | CONTENT_KEYS if content else KEYS
+    want = keys - {"description"} - CONTENT_KEYS if partial else keys
     errs = []
     missing = sorted(want - set(record))
     if missing:
         errs.append(f"missing keys: {', '.join(missing)}")
-    extra = sorted(set(record) - KEYS)
+    extra = sorted(set(record) - keys)
     if extra:
         errs.append(f"unexpected keys: {', '.join(extra)}")
     if "category" in record and record["category"] not in CATEGORIES:
@@ -134,4 +149,31 @@ def validate(record: object, partial: bool = False, listing: str | None = None) 
         if share > MAX_COPIED:
             errs.append(f"description repeats the listing: {share:.0%} of its {PHRASE}-word phrases appear in it "
                         f"word for word (at most {MAX_COPIED:.0%}); write it in your own words")  # fmt: skip
+    if content:
+        errs += _content_errors(record, listing)
     return errs
+
+
+def _content_errors(record: dict, listing: str | None) -> list[str]:
+    # Each message starts with its key, so a fixer can tell content faults from the rest.
+    errs = []
+    t = record.get("seo_title")
+    if "seo_title" in record and not (isinstance(t, str) and 0 < len(t.strip()) <= MAX_SEO_CHARS):
+        errs.append(f"seo_title must be a string of 1 to {MAX_SEO_CHARS} characters; it has {_chars(t)}")
+    m = record.get("meta_description")
+    if "meta_description" in record and not (isinstance(m, str) and MIN_META_CHARS <= len(m.strip()) <= MAX_META_CHARS):
+        errs.append(f"meta_description must be {MIN_META_CHARS} to {MAX_META_CHARS} characters; it has {_chars(m)}")
+    if "long_description" in record:
+        d = record["long_description"]
+        n = len(d.split()) if isinstance(d, str) else 0
+        if not MIN_LONG_WORDS <= n <= MAX_LONG_WORDS:
+            errs.append(f"long_description must be {MIN_LONG_WORDS} to {MAX_LONG_WORDS} words; it has {n}")
+        share = copied_share(d, listing) if listing and isinstance(d, str) else 0.0
+        if share > MAX_COPIED:
+            errs.append(f"long_description repeats the listing: {share:.0%} of its {PHRASE}-word phrases appear in "
+                        f"it word for word (at most {MAX_COPIED:.0%}); write it in your own words")  # fmt: skip
+    return errs
+
+
+def _chars(v: object) -> int:
+    return len(v.strip()) if isinstance(v, str) else 0

@@ -69,6 +69,11 @@ tasks:
       - test -f data/raw/esci-products.parquet || curl -fsSL -o data/raw/esci-products.parquet https://github.com/amazon-science/esci-data/raw/main/shopping_queries_dataset/shopping_queries_dataset_products.parquet
       - "{{.PY}} -m avg.cli data data/raw/esci-products.parquet --n 1000 --seed 1"
 
+  data:intake:
+    desc: "Rebuild data/intake (both feeds, their catalogs, the policy) from the ESCI file `task data` downloads"
+    cmds:
+      - "{{.PY}} -m avg.cli data data/raw/esci-products.parquet --intake data/intake --seed 1"
+
   models:
     desc: Download the two Gemma 4 GGUFs (12 GB) and check their SHA-256
     cmds:
@@ -102,16 +107,16 @@ tasks:
       - "{{.PY}} -m avg.cli meter --openai http://127.0.0.1:8081 --route gemma-4-12b=http://127.0.0.1:8081 --route gemma-4-e4b=http://127.0.0.1:8082 --ledger {{.LEDGER | default \"runs/ledger.jsonl\"}}"
 
   serial:
-    desc: "Every task 1 arm, one after another, one model loaded at a time (RUN=name LIMIT=20 ONLY=arm,arm SLOTS=n REPLACE=1 THINKING=n)"
+    desc: "Every arm, one after another, one model loaded at a time (RUN=name LIMIT=20 ONLY=arm,arm SLOTS=n REPLACE=1 THINKING=n INTAKE=20|85 for catalog intake)"
     cmds:
-      - "{{.PY}} -m avg.cli serial --run {{.RUN}} --limit {{.LIMIT | default 20}} {{if .SLOTS}}--slots {{.SLOTS}}{{end}} {{if .REPLACE}}--replace{{end}} {{if .THINKING}}--thinking {{.THINKING}}{{end}} {{if .ONLY}}--only {{.ONLY}}{{end}}"
+      - "{{.PY}} -m avg.cli serial --run {{.RUN}} --limit {{.LIMIT | default 20}} {{if .SLOTS}}--slots {{.SLOTS}}{{end}} {{if .REPLACE}}--replace{{end}} {{if .THINKING}}--thinking {{.THINKING}}{{end}} {{if .ONLY}}--only {{.ONLY}}{{end}} {{if .INTAKE}}--intake {{.INTAKE}}{{end}}"
     requires:
       vars: [RUN]
 
   hosted:
-    desc: "The arms against hosted Claude Haiku 5.5 (RUN=name LIMIT=50 THINKING=off|default ONLY=arm,arm REPLACE=1); needs ANTHROPIC_API_KEY in .env.local"
+    desc: "The arms against hosted Claude Haiku 5.5 (RUN=name LIMIT=50 THINKING=off|default ONLY=arm,arm REPLACE=1 INTAKE=20|85); needs ANTHROPIC_API_KEY in .env.local"
     cmds:
-      - "{{.PY}} -m avg.cli hosted --run {{.RUN}} --limit {{.LIMIT | default 50}} --thinking {{.THINKING | default `off`}} {{if .REPLACE}}--replace{{end}} {{if .ONLY}}--only {{.ONLY}}{{end}}"
+      - "{{.PY}} -m avg.cli hosted --run {{.RUN}} --limit {{.LIMIT | default 50}} --thinking {{.THINKING | default `off`}} {{if .REPLACE}}--replace{{end}} {{if .ONLY}}--only {{.ONLY}}{{end}} {{if .INTAKE}}--intake {{.INTAKE}}{{end}}"
     requires:
       vars: [RUN]
 

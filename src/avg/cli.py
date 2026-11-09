@@ -30,7 +30,7 @@ from aiohttp import web
 from . import config, data, harness, ledger, llm, meter, paired, prices, publish, report, serial, stub
 from .llm import Client, InfraError
 from .scores import score_files
-from .tasks import enrich
+from .tasks import enrich, intake
 
 
 def _items(pairs: list[str]) -> dict[tuple[str, str], int]:
@@ -65,6 +65,8 @@ async def _run(a: argparse.Namespace, out) -> list[dict]:
         # agent also caches its growing conversation, which its next turn re-sends.
         cache = "system" if a.shape == "graph" else "conversation"
         client = Client(session, a.meter, a.run, wire=a.wire, api_key=_key(a.wire), cache=cache, thinking=a.thinking)
+        if a.task == intake.TASK:
+            return await _intake(a, client, items, out)
         if a.shape == "graph":
             models = enrich.Models(small=a.small or a.model, large=a.large or a.model)
             reasons: dict[str, str] = {}
@@ -83,6 +85,29 @@ async def _run(a: argparse.Namespace, out) -> list[dict]:
 
         records, outcomes = await enrich.agents(client, a.arm, items, a.model, a.concurrency, a.max_turns, done)
         return [row(it, outcomes[it.id], records.get(it.id)) for it in items]
+
+
+async def _intake(a: argparse.Namespace, client: Client, items: list[enrich.Item], out) -> list[dict]:
+    """Catalog intake's rows: a record or a skip per item (see `_run`)."""
+    catalog_path, policy_path = intake.paths(a.items)
+    catalog, policy = intake.load_catalog(catalog_path), intake.load_policy(policy_path)
+    if a.shape == "graph":
+        models = enrich.Models(small=a.small or a.model, large=a.large or a.model)
+        got = await intake.graph(client, a.arm, items, models, catalog, policy, limit=a.concurrency)
+        return [{"arm": a.arm, "id": it.id, "record": got.get(it.id, {}).get("record"),
+                 "skip": got.get(it.id, {}).get("skip")} for it in items]  # fmt: skip
+
+    def row(it: enrich.Item, o, result: dict) -> dict:
+        return {"arm": a.arm, "id": it.id, "record": result.get("record"), "skip": result.get("skip"),
+                "turns": o.turns, "reason": o.reason}  # fmt: skip
+
+    def done(it, o, result) -> None:
+        out.write(json.dumps(row(it, o, result)) + "\n")
+        out.flush()
+
+    results, outcomes = await intake.agents(client, a.arm, items, a.model, catalog, policy, a.concurrency,
+                                            a.max_turns, done)  # fmt: skip
+    return [row(it, outcomes[it.id], results.get(it.id, {})) for it in items]
 
 
 def _key(wire: str) -> str:
@@ -117,12 +142,14 @@ def _serial(a: argparse.Namespace) -> int:
     local = _local()
     device = _device(local)
     print(f"[serial] device: {device or 'llama.cpp default (set device in local.toml)'}")
+    task, items = serial.intake_items(a.intake)
     small = serial.Server("gemma-4-e4b", local.small_gguf, 8082)
     large = serial.Server("gemma-4-12b", local.large_gguf, 8081)
     cfg = serial.Config(
         run=a.run, limit=a.limit, llama_server=local.llama_server, device=device, small=small, large=large,
         large_harness=serial.Server(large.alias, large.gguf, large.port, ctx=local.harness_ctx),
         hermes_bin=serial.resolve(local.hermes_bin), slots=a.slots or local.slots, thinking=a.thinking,
+        task=task, items=items,
     )  # fmt: skip
     steps = serial.plan(cfg)
     if a.only:
@@ -132,7 +159,7 @@ def _serial(a: argparse.Namespace) -> int:
     meta = {"limit": a.limit, "slots": cfg.slots, "thinking": cfg.thinking, "max_tokens": Client.max_tokens,
             "llama_server": Path(cfg.llama_server).parent.name, "small": Path(small.gguf).name,
             "large": Path(large.gguf).name, "harness_ctx": cfg.large_harness.ctx,
-            "code": serial.code_version()}  # fmt: skip
+            "code": serial.code_version(), **_task_meta(cfg)}  # fmt: skip
     upstream = ["--openai", f"http://127.0.0.1:{large.port}",
                 "--route", f"{large.alias}=http://127.0.0.1:{large.port}",
                 "--route", f"{small.alias}=http://127.0.0.1:{small.port}"]  # fmt: skip
@@ -142,7 +169,7 @@ def _serial(a: argparse.Namespace) -> int:
 def _hosted(a: argparse.Namespace) -> int:
     if not os.environ.get(llm.KEY_ENV):
         raise SystemExit(f"hosted runs need {llm.KEY_ENV} (put it in .env.local; the Taskfile loads it)")
-    cfg = serial.hosted_config(a.run, a.limit, a.slots, a.port)
+    cfg = serial.hosted_config(a.run, a.limit, a.slots, a.port, *serial.intake_items(a.intake))
     steps = serial.hosted_plan(cfg, a.model, a.thinking)
     if a.only:
         wanted = set(a.only.split(","))
@@ -150,8 +177,13 @@ def _hosted(a: argparse.Namespace) -> int:
     meta = {"limit": a.limit, "slots": cfg.slots, "thinking": 0 if a.thinking == "off" else "model default",
             "max_tokens": Client.max_tokens,
             "provider": "anthropic", "model": a.model, "anthropic_version": llm.ANTHROPIC_VERSION,
-            "code": serial.code_version()}  # fmt: skip
+            "code": serial.code_version(), **_task_meta(cfg)}  # fmt: skip
     return _sequence(a, cfg, steps, meta, ["--openai", llm.ANTHROPIC_API, "--anthropic", llm.ANTHROPIC_API])
+
+
+def _task_meta(cfg: serial.Config) -> dict:
+    """A catalog intake run records its task and mix; task 1's conditions stay as they were."""
+    return {} if cfg.task == "enrich" else {"task": cfg.task, "items": cfg.items}
 
 
 def _sequence(a: argparse.Namespace, cfg: serial.Config, steps: list[serial.Step], meta: dict,
@@ -174,7 +206,7 @@ def _sequence(a: argparse.Namespace, cfg: serial.Config, steps: list[serial.Step
         serial.stop(m)
     done = [runs / f"{s.arm}.jsonl" for s in steps if (runs / f"{s.arm}.jsonl").exists()]
     if done:
-        table, counts = score_files(Path("data/enrich/items.jsonl"), done)
+        table, counts = score_files(Path(cfg.items), done)
         sys.stdout.write(table)
         (runs / "scores.json").write_text(json.dumps(counts, indent=2) + "\n", encoding="utf-8")
     return 0 if all(c == 0 for c in codes.values()) else 1
@@ -199,6 +231,12 @@ def main(argv: list[str] | None = None) -> int:
     d.add_argument("--n", type=int, default=1000)
     d.add_argument("--seed", type=int, default=1)
     d.add_argument("--out", type=Path, default=Path("data/enrich/items.jsonl"))
+    d.add_argument(
+        "--intake",
+        type=Path,
+        metavar="DIR",
+        help="build the catalog intake task's files into DIR instead (both mixes, catalogs, policy)",
+    )
 
     r = sub.add_parser("run", help="run one arm of the enrichment task through the meter")
     r.add_argument("--shape", choices=["graph", "agent"], required=True)
@@ -229,6 +267,12 @@ def main(argv: list[str] | None = None) -> int:
         metavar="STEP,STEP",
         help=f"graph: steps run with thinking off whatever the run's condition ({', '.join(enrich.STEPS)})",
     )
+    r.add_argument(
+        "--task",
+        choices=["enrich", "intake"],
+        default="enrich",
+        help="enrich: task 1; intake: catalog intake (--items is then a mix, e.g. data/intake/items-20.jsonl)",
+    )
     r.add_argument("--max-turns", type=int, default=8)
     r.add_argument("--out", type=Path, required=True, help="results file (.jsonl)")
 
@@ -240,6 +284,12 @@ def main(argv: list[str] | None = None) -> int:
     h.add_argument("--limit", type=int, default=0, help="first N items only")
     h.add_argument("--meter", default="http://127.0.0.1:8787")
     h.add_argument("--model", required=True)
+    h.add_argument(
+        "--task",
+        choices=["enrich", "intake"],
+        default="enrich",
+        help="enrich: task 1; intake: catalog intake (--items is then a mix, e.g. data/intake/items-20.jsonl)",
+    )
     h.add_argument("--max-turns", type=int, default=150, help="the same cap for every harness")
     h.add_argument("--timeout", type=int, default=4 * 3600, help="seconds before the harness is stopped")
     h.add_argument("--bin", default="", help="the harness's executable (default: claude, or hermes on PATH)")
@@ -268,6 +318,13 @@ def main(argv: list[str] | None = None) -> int:
         help="thinking tokens per reply for every arm: 0 off (default), N a budget, -1 no limit",
     )
     se.add_argument("--replace", action="store_true", help="rerun arms that already have records in this run")
+    se.add_argument(
+        "--intake",
+        type=int,
+        choices=[20, 85],
+        metavar="MIX",
+        help="run catalog intake on the mix with MIX% rejects instead of task 1",
+    )
     se.add_argument("--slots", type=int, default=0, help="requests in flight for per-item arms (default: local.toml)")
 
     ho = sub.add_parser("hosted", help="run the arms against a hosted Anthropic model, one after another")
@@ -281,6 +338,13 @@ def main(argv: list[str] | None = None) -> int:
     ho.add_argument("--slots", type=int, default=4, help="requests in flight for per-item arms")
     ho.add_argument("--port", type=int, default=8788, help="the meter's port (a local run may hold 8787)")
     ho.add_argument("--replace", action="store_true", help="rerun arms that already have records in this run")
+    ho.add_argument(
+        "--intake",
+        type=int,
+        choices=[20, 85],
+        metavar="MIX",
+        help="run catalog intake on the mix with MIX% rejects instead of task 1",
+    )
 
     sub.add_parser("device", help="print llama-server's --device flag for the configured GPU (empty if none)")
 
@@ -319,6 +383,16 @@ def main(argv: list[str] | None = None) -> int:
         web.run_app(meter.app(up, a.ledger), host="127.0.0.1", port=a.port)
     elif a.cmd == "stub":
         web.run_app(stub.app(), host="127.0.0.1", port=a.port)
+    elif a.cmd == "data" and a.intake:
+        pool, books = data.intake_pools(data.esci_rows(a.parquet), a.seed)
+        for name, rows in data.intake(pool, books, seed=a.seed).items():
+            path = a.intake / name
+            if name.endswith(".json"):
+                path.parent.mkdir(parents=True, exist_ok=True)
+                path.write_text(json.dumps(rows, indent=2) + "\n", encoding="utf-8", newline="\n")
+            else:
+                data.write(rows, path)
+            print(f"{path}: {1 if name.endswith('.json') else len(rows)}")
     elif a.cmd == "data":
         items = data.sample(data.esci_rows(a.parquet), a.n, a.seed)
         data.write(items, a.out)
@@ -343,8 +417,15 @@ def main(argv: list[str] | None = None) -> int:
         root = a.workspace or Path(tempfile.gettempdir()) / "avg-ws" / a.run / arm
         if a.skill and a.harness != "claude-code":
             raise SystemExit("--skill is a Claude Code skill")
-        ws = harness.workspace(root, items, skill=a.skill)
-        base = f"{a.meter.rstrip('/')}/t/{a.run}/{arm}/{enrich.TASK}/all"
+        if a.task == intake.TASK:
+            if a.skill:
+                raise SystemExit("--skill is task 1's")
+            catalog_path, policy_path = intake.paths(a.items)
+            ws = harness.intake_workspace(root, items, intake.load_catalog(catalog_path),
+                                          intake.load_policy(policy_path))  # fmt: skip
+        else:
+            ws = harness.workspace(root, items, skill=a.skill)
+        base = f"{a.meter.rstrip('/')}/t/{a.run}/{arm}/{a.task}/all"
         make = harness.HARNESSES[a.harness]
         if a.hosted and a.harness != "claude-code":
             raise SystemExit("--hosted runs claude-code only")
@@ -356,13 +437,18 @@ def main(argv: list[str] | None = None) -> int:
         inv = make(ws, base, a.model, a.max_turns, **kw)
         started = time.monotonic()
         code = harness.run(inv, a.timeout)
-        records = harness.collect(ws)
+        if a.task == intake.TASK:
+            got = harness.collect_rows(ws)
+            rows = [{"arm": arm, "id": it.id, "record": None, "skip": None, **got.get(it.id, {})} for it in items]
+        else:
+            records = harness.collect(ws)
+            rows = [{"arm": arm, "id": it.id, "record": records.get(it.id)} for it in items]
         a.out.parent.mkdir(parents=True, exist_ok=True)
         with a.out.open("w", encoding="utf-8", newline="\n") as f:
-            for it in items:
-                f.write(json.dumps({"arm": arm, "id": it.id, "record": records.get(it.id)}) + "\n")
+            f.writelines(json.dumps(r) + "\n" for r in rows)
         print(f"{a.harness} exited {code} after {time.monotonic() - started:.0f}s; "
-              f"{len(records)}/{len(items)} records written to {a.out}; workspace {ws}")  # fmt: skip
+              f"{sum(r['record'] is not None for r in rows)}/{len(items)} records written to {a.out}; "
+              f"workspace {ws}")  # fmt: skip
     elif a.cmd == "serial":
         return _serial(a)
     elif a.cmd == "hosted":

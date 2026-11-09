@@ -26,9 +26,10 @@ import subprocess
 from dataclasses import dataclass
 from pathlib import Path
 
+from .tasks import intake
 from .tasks import record as record_module
 from .tasks.enrich import Item
-from .tasks.record import RECORD_SPEC
+from .tasks.record import CONTENT_SPEC, RECORD_SPEC
 
 TASK_MD = f"""# Task: enrich product listings
 
@@ -158,6 +159,120 @@ def collect(root: Path) -> dict[str, object]:
         try:
             row = json.loads(line)
             out[str(row["id"])] = row["record"]
+        except (ValueError, KeyError, TypeError):
+            continue
+    return out
+
+
+# ---- catalog intake -----------------------------------------------------------------------------
+
+
+def intake_md(policy: dict) -> str:
+    return f"""# Task: take a supplier's feed into the store's catalog
+
+`products.jsonl` is the feed: one product listing per line, as JSON with the keys "id", "title",
+"bullets" and "description". `catalog.jsonl` is the store's catalog: one product per line, with
+"sku", "brand", "title" and "color".
+
+Decide for every product in the feed whether the store should take it, by the rules below. For a
+product it should take, append its full record to `records.jsonl` as one line of JSON:
+
+    {{"id": "<the product's id>", "record": {{...}}}}
+
+For a product it should not take, append a skip instead, with the reason:
+
+    {{"id": "<the product's id>", "skip": "duplicate"}}   or   {{"id": "<the product's id>", "skip": "excluded"}}
+
+{intake.rules(policy)}
+
+{RECORD_SPEC}
+
+{CONTENT_SPEC}
+
+Check your work with `python validate.py`. It reads `records.jsonl` and lists every product that
+has no line yet and every record that is invalid; it does not judge your skips. If a product appears
+more than once, its last line counts. The task is done when `python validate.py` reports that every
+product has a valid record or a skip.
+"""
+
+
+VALIDATE_INTAKE_PY = '''"""Checks records.jsonl against products.jsonl: every product needs a valid record or a skip.
+Run: python validate.py"""
+
+import json
+import os
+import sys
+
+from record import listing_text, validate
+
+products = {}
+for line in open("products.jsonl", encoding="utf-8"):
+    if line.strip():
+        p = json.loads(line)
+        products[p["id"]] = p
+rows, unreadable = {}, 0
+if os.path.exists("records.jsonl"):
+    for line in open("records.jsonl", encoding="utf-8"):
+        if not line.strip():
+            continue
+        try:
+            row = json.loads(line)
+            if "skip" not in row:
+                row["record"]
+            rows[row["id"]] = row
+        except (ValueError, KeyError, TypeError):
+            unreadable += 1
+problems = []
+for i, p in products.items():
+    row = rows.get(i)
+    if row is None:
+        problems.append(f"{i}: missing")
+    elif "skip" in row:
+        if row["skip"] not in ("duplicate", "excluded"):
+            problems.append(f"{i}: skip must be \\"duplicate\\" or \\"excluded\\"")
+    else:
+        errs = validate(row["record"], listing=listing_text(p), content=True)
+        if errs:
+            problems.append(f"{i}: " + "; ".join(errs))
+if unreadable:
+    problems.append(f"{unreadable} line(s) of records.jsonl are not a record or a skip line")
+if problems:
+    print(f"{len(problems)} problem(s):")
+    print("\\n".join(problems))
+    sys.exit(1)
+print(f"All {len(products)} products have a valid record or a skip.")
+'''
+
+
+def intake_workspace(root: Path, items: list[Item], catalog: list[dict], policy: dict) -> Path:
+    """A fresh workspace for catalog intake: the feed, the catalog, TASK.md and the validator."""
+    if root.exists():
+        shutil.rmtree(root)
+    root.mkdir(parents=True)
+    with (root / "products.jsonl").open("w", encoding="utf-8", newline="\n") as f:
+        f.writelines(json.dumps(it.public(), ensure_ascii=False) + "\n" for it in items)
+    with (root / "catalog.jsonl").open("w", encoding="utf-8", newline="\n") as f:
+        f.writelines(json.dumps(c, ensure_ascii=False) + "\n" for c in catalog)
+    (root / "TASK.md").write_text(intake_md(policy), encoding="utf-8", newline="\n")
+    (root / "validate.py").write_text(VALIDATE_INTAKE_PY, encoding="utf-8", newline="\n")
+    shutil.copyfile(record_module.__file__, root / "record.py")
+    return root
+
+
+def collect_rows(root: Path) -> dict[str, dict]:
+    """What the harness wrote for catalog intake: id → {"record": ...} or {"skip": ...}, the last
+    readable line per id."""
+    out: dict[str, dict] = {}
+    path = root / "records.jsonl"
+    if not path.exists():
+        return out
+    for line in path.read_text(encoding="utf-8", errors="replace").splitlines():
+        try:
+            row = json.loads(line)
+            if "skip" in row:
+                out[str(row["id"])] = {"skip": row["skip"]}
+            else:
+                out[str(row["id"])] = {"record": row["record"]}
         except (ValueError, KeyError, TypeError):
             continue
     return out

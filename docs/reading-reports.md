@@ -64,6 +64,17 @@ The conditions every arm in the run shared, from the run's `meta.json`:
 | Color | Share matching the catalog's color, over the items that have one. Reported, not part of success. |
 | Success | Share of items both valid and with the right brand. |
 
+A catalog intake run ([why](design.md#catalog-intake)) scores differently, since some items should
+be skipped:
+
+| Column | Meaning |
+| --- | --- |
+| New catalogued | Share of the products the store should take that got a valid record, with its page content, naming the right brand. |
+| Duplicates skipped | Share of catalog and feed duplicates handled right: skipped, or for a product listed several times, exactly one listing catalogued. |
+| Exclusions skipped | Share of excluded brands and books that were skipped. |
+| Records for rejects | Records written for items that should have been skipped: content paid for and thrown away. |
+| Success | Share of all items handled right. |
+
 ## Tokens per item
 
 | Column | Meaning |

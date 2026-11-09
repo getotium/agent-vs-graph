@@ -45,6 +45,11 @@ graph stays in every run, so the report shows what the choice changed.
    at real-time only, so the saving from the shape and the saving from the discount read apart.
 4. **Predictability.** A graph's cost can be estimated before it runs; the report shows each
    arm's per-item tail (p95, max) beside the mean.
+5. **Early exit.** A graph's checks are steps in a fixed order, so an item that fails one stops
+   there and the expensive steps after it never run: a function returning early, a pipeline job
+   skipped by its condition. An agent can stop early too, but only once it has decided to, and it
+   decides its own order. Measured by the catalog intake task, below, as cost per item against
+   the share of the input that should be rejected.
 
 ## Measuring at the wire
 
@@ -173,15 +178,87 @@ count that keeps a local run to hours.
    category, brand, color, specs and a short description as validated JSON. The graph extracts,
    validates, repairs only the failures (up to three rounds) and describes. ESCI was chosen for
    real, messy listings with brand and color as partial gold; the sample is filtered to general
-   merchandise
-   ([data/enrich/README.md](../data/enrich/README.md)).
-2. **Repository review** (planned): a pinned set of small public repositories → per-file
+   merchandise ([data/enrich/README.md](../data/enrich/README.md)).
+2. **Catalog intake** (task 1 with rejects): below.
+3. **Repository review** (planned): a pinned set of small public repositories → per-file
    summaries → per-repository findings → one report. Scored by a fixed rubric with a judge model,
    the same for every arm.
-3. **Research brief** (planned): a fixed, pre-fetched corpus → notes → a cited brief, scored on
+4. **Research brief** (planned): a fixed, pre-fetched corpus → notes → a cited brief, scored on
    whether every claim traces to a document.
-4. **A task that favors the agent** (planned): steps that depend on what is found, which a graph
+5. **A task that favors the agent** (planned): steps that depend on what is found, which a graph
    has to enumerate.
+
+## Catalog intake
+
+A store that ingests a supplier's feed does not want everything in it. Some items are already in
+its catalog, some appear twice in the same feed, and some are things it does not sell. Knowing
+which takes work: the brand, the model and the kind of product have to be read from the listing
+before anything can be checked against the catalog or the store's rules. Only the items that pass
+should get the expensive part, the content written for the store's pages. How much of a feed is
+rejected depends on the supplier: a specialist taking a specialist's feed rejects a fifth or so; a
+specialist taking a general retailer's feed can reject most of it.
+
+**Items.** Built from the same ESCI catalog as task 1, by `avg data intake`, seeded, from public
+data only. Each input has an opaque id (`p` and eight hex digits), so nothing about an item can be
+read from its id. Every item is one of:
+
+| Kind | What it is | Should be |
+| --- | --- | --- |
+| new | A product the store does not have | Catalogued: a record and its content |
+| catalog duplicate | A product already in `catalog.jsonl`, listed again in different words | Skipped |
+| feed duplicate | A second (or third) listing of a product earlier in the same feed | Skipped; one listing of the product catalogued |
+| excluded brand | A product of a brand on the store's excluded list | Skipped |
+| excluded kind | A book. The store does not sell books | Skipped |
+
+- **Re-listings** are made from the original listing by fixed rules, no model involved: the title's
+  parts reordered with the brand moved, the bullet points in reverse order, the description dropped
+  when there are bullets and cut to its first half when there are not. The brand, model and
+  facts survive, the wording does not match. Feed duplicates are an original and its re-listings.
+- **Hard cases are in on purpose.** The catalog also holds other products of each duplicated
+  product's brand, and some new items share a brand with catalog entries, so a brand match is not
+  enough: the product has to match.
+- **Books are known by their product id,** which in ESCI is the ISBN-10 for a book; the ids are
+  replaced before any arm sees an item. New items are kept clear of anything that could be read as
+  a book or other media, so a correct exclusion is never scored as a wrong one.
+- **Two mixes of 500 items:** 20% rejects (`items-20.jsonl`) and 85% rejects (`items-85.jsonl`), each
+  with its own `catalog-*.jsonl`. Rejects split 30% catalog duplicates, 20% feed duplicates, 25%
+  excluded brands, 25% books. The store's rules (`policy.json`: twelve excluded brands, no books)
+  are the same for both.
+
+**What a kept item gets.** Task 1's record (category, brand, color, specs, a short description),
+plus the content a store page needs: an SEO title of at most 60 characters, a meta description of
+120 to 160 characters and a long description of 120 to 200 words, written rather than copied by
+the same rule as the short one. The content is the expensive tail; the report says what it cost
+against the checks before it.
+
+**Scoring.** A rejected item succeeds if it was skipped, whatever reason was given; a record
+written for it is a failure, and the report counts those records separately because their content
+is money spent on an item that should have stopped. A new item succeeds as in task 1: a valid
+record (now with its content) and the right brand; skipping it is a failure. A feed duplicate's
+listings are scored together: every listing of the product succeeds if exactly one of them has a
+valid record with the right brand, and every listing fails otherwise.
+
+**The arms,** each the strongest fair version of its shape:
+
+- **Graph.** Extract the attributes and the model number (small) → the store's rules, in code: an
+  excluded brand or a book stops here → repair what remains invalid → match against the catalog and
+  the rest of the feed: candidates are entries of the same brand, ranked by shared title words, the
+  top three sent to one compare step (small) that names the match or none → write the content for
+  what is left → validate and fix, up to three rounds. Every step runs over every item before the
+  next, so the feed match sees the whole feed at once.
+- **Agent, per item.** The record spec, the rules and the instruction to check before writing, with
+  tools to look a brand up in the catalog (`lookup_catalog`, which also returns the products other
+  agents in the run have already accepted, as a shared store would), to skip an item with a reason,
+  and to validate and submit. Agents run four at a time, as in task 1, so two listings of one product
+  can be in flight together; that is part of what is measured.
+- **Agent, whole file.** Claude Code handed the feed, the catalog and the rules in TASK.md, with the
+  validator, which accepts a skip line (`{"id": ..., "skip": "duplicate" | "excluded"}`) as well as
+  a record.
+
+**What the report adds:** success by kind of item, records written for rejects, and each arm's cost
+split into the cost of a rejected item and of a kept one, so its cost per 1,000 items can be drawn
+for any reject share from 0% to 90%. The two measured mixes check the line, and whether skipping
+gets less accurate when most of the feed is rejects.
 
 ## At volume
 

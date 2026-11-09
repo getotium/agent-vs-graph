@@ -15,7 +15,7 @@ from pathlib import Path
 
 from . import harness, ledger, paired, prices, report
 from .scores import score_files
-from .tasks import enrich
+from .tasks import enrich, intake
 
 
 @dataclass
@@ -67,12 +67,12 @@ def publish(
         shutil.copyfile(src / f"{a}.jsonl", dst / f"{a}.jsonl")
         outputs.append(dst / f"{a}.jsonl")
 
-    table, counts = score_files(items, outputs)
+    table, counts = score_files(Path(meta.get("items", items)), outputs)  # an intake run names its mix
     (dst / "scores.json").write_text(json.dumps(counts, indent=2) + "\n", encoding="utf-8", newline="\n")
     rows = {a: sum(1 for x in (dst / f"{a}.jsonl").read_text(encoding="utf-8").splitlines() if x.strip())
             for a in arms}  # fmt: skip
     # A harness is handed the whole file as one unit; the rest are one unit per item.
-    chunked = {(enrich.TASK, a): rows[a] for a in arms if harness.harness_of(a)}
+    chunked = {(meta.get("task", enrich.TASK), a): rows[a] for a in arms if harness.harness_of(a)}
     groups = report.group(ledger.read([dst / "ledger.jsonl"]), chunked)
     md = report.render(
         groups,
@@ -96,7 +96,9 @@ def publish(
 README, DESIGN, GUIDE = "../../README.md", "../../docs/design.md", "../../docs/reading-reports.md"
 
 TASKS = {
-    enrich.TASK: "product enrichment: each item is a product listing, to be turned into a validated catalog record"
+    enrich.TASK: "product enrichment: each item is a product listing, to be turned into a validated catalog record",
+    intake.TASK: "catalog intake: each item is a listing from a supplier's feed, to be catalogued with page content or "
+    "skipped as a duplicate or excluded product",
 }
 
 CONDITIONS = {
@@ -112,6 +114,17 @@ CONDITIONS = {
     "provider": "the hosted API the run used; its own counts are the bill when priced as its model",
     "model": "the hosted model every arm used",
     "anthropic_version": "the Messages API version the requests named",
+    "task": "the task, when it is not task 1",
+    "items": "the input file: for catalog intake, the mix (items-20: 20% of the feed should be rejected)",
+}
+
+SUCCESS = {
+    enrich.TASK: "- **Success** is a record that passes the shared validator and names the right brand.",
+    intake.TASK: (
+        "- **Success** is a skip for an item the store should not take (a duplicate, an excluded brand, a book), "
+        "and for a new product a record with its page content that passes the shared validator and names the "
+        "right brand. A product listed several times in the feed succeeds when exactly one listing is catalogued."
+    ),
 }
 
 
@@ -155,7 +168,7 @@ def context(run: str, meta: dict, groups: list[report.Group], scores_table: str)
         "",
         "## In brief",
         "",
-        "- **Success** is a record that passes the shared validator and names the right brand.",
+        SUCCESS.get(meta.get("task", enrich.TASK), SUCCESS[enrich.TASK]),
         (
             "- **Costs** are per item, as each vendor would bill the run's tokens. The run itself was local: token "
             "counts are the local model's, so they compare arms like for like rather than quote a hosted bill."

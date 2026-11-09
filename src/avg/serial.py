@@ -62,6 +62,13 @@ class Config:
     # model's bill, and an unlimited budget ran some replies into the output cap.
     thinking: int = 0
     harnesses: list[str] = field(default_factory=lambda: ["claude-code", "hermes"])
+    task: str = "enrich"  # or "intake", on the mix in `items`
+    items: str = "data/enrich/items.jsonl"
+
+
+def _task(c: Config) -> list[str]:
+    """What every step is told about the task: nothing for task 1, so its commands stay as they were."""
+    return [] if c.task == "enrich" else ["--task", c.task, "--items", c.items]
 
 
 # The lean graph: the same graph with its describe step's thinking off. Chosen before it was run,
@@ -71,10 +78,10 @@ LEAN = ["--no-thinking", "describe"]
 
 
 def plan(c: Config) -> list[Step]:
-    """The arms of task 1, in order."""
+    """The arms of the run's task, in order. The lean graph is task 1's variant."""
     small, large, n = replace(c.small, slots=c.slots), replace(c.large, slots=c.slots), str(c.slots)
     meter = f"http://127.0.0.1:{c.meter_port}"
-    common = ["--run", c.run, "--limit", str(c.limit), "--meter", meter]
+    common = ["--run", c.run, "--limit", str(c.limit), "--meter", meter, *_task(c)]
     out = lambda arm: ["--out", f"runs/{c.run}/{arm}.jsonl"]
     steps = [
         Step("graph", [small, large],
@@ -84,7 +91,7 @@ def plan(c: Config) -> list[Step]:
              ["run", "--shape", "graph", "--arm", "graph-12b", *common, "--model", large.alias, "--concurrency", n,
               *out("graph-12b")]),
     ]  # fmt: skip
-    if c.thinking != 0:
+    if c.thinking != 0 and c.task == "enrich":
         steps.append(Step("graph-12b-lean", [large],
                           ["run", "--shape", "graph", "--arm", "graph-12b-lean", *common, "--model", large.alias,
                            *LEAN, "--concurrency", n, *out("graph-12b-lean")]))  # fmt: skip
@@ -109,9 +116,15 @@ def plan(c: Config) -> list[Step]:
 _NO_SERVER = Server("", "", 0)
 
 
-def hosted_config(run: str, limit: int, slots: int, meter_port: int) -> Config:
+def hosted_config(run: str, limit: int, slots: int, meter_port: int, task: str = "enrich",
+                  items: str = "data/enrich/items.jsonl") -> Config:  # fmt: skip
     return Config(run=run, limit=limit, llama_server="", device="", small=_NO_SERVER, large=_NO_SERVER,
-                  large_harness=_NO_SERVER, meter_port=meter_port, slots=slots)  # fmt: skip
+                  large_harness=_NO_SERVER, meter_port=meter_port, slots=slots, task=task, items=items)  # fmt: skip
+
+
+def intake_items(mix: int | None) -> tuple[str, str]:
+    """The task and items file a run's --intake MIX names: task 1 when it names none."""
+    return ("intake", f"data/intake/items-{mix}.jsonl") if mix else ("enrich", "data/enrich/items.jsonl")
 
 
 def hosted_plan(c: Config, model: str, thinking: str = "off", tag: str = "haiku") -> list[Step]:
@@ -123,9 +136,10 @@ def hosted_plan(c: Config, model: str, thinking: str = "off", tag: str = "haiku"
     thinks beside arms that do not is not the same condition. "default" runs every arm as the
     model ships."""
     meter, n = f"http://127.0.0.1:{c.meter_port}", str(c.slots)
-    common = ["--run", c.run, "--limit", str(c.limit), "--meter", meter]
+    common = ["--run", c.run, "--limit", str(c.limit), "--meter", meter, *_task(c)]
     out = lambda arm: ["--out", f"runs/{c.run}/{arm}.jsonl"]
     graph, agent, code = f"graph-{tag}", f"agent-{tag}", f"claude-code-{tag}"
+    task1 = c.task == "enrich"  # the lean graph and the skill are task 1's
     wire = ["--wire", "anthropic", "--thinking", thinking]
     steps = [
         Step(graph, [], ["run", "--shape", "graph", "--arm", graph, *common, "--model", model, *wire,
@@ -134,14 +148,16 @@ def hosted_plan(c: Config, model: str, thinking: str = "off", tag: str = "haiku"
                          "--concurrency", n, *out(agent)]),
     ]  # fmt: skip
     if thinking == "default":
-        steps.insert(1, Step(f"{graph}-lean", [], ["run", "--shape", "graph", "--arm", f"{graph}-lean", *common,
-                                                   "--model", model, *wire, *LEAN, "--concurrency", n,
-                                                   *out(f"{graph}-lean")]))  # fmt: skip
+        if task1:
+            steps.insert(1, Step(f"{graph}-lean", [], ["run", "--shape", "graph", "--arm", f"{graph}-lean", *common,
+                                                       "--model", model, *wire, *LEAN, "--concurrency", n,
+                                                       *out(f"{graph}-lean")]))  # fmt: skip
         steps.append(Step(code, [], ["harness", "--harness", "claude-code", "--arm", code, *common, "--model", model,
                                      "--hosted", *out(code)]))  # fmt: skip
-        skill = f"claude-code-skill-{tag}"
-        steps.append(Step(skill, [], ["harness", "--harness", "claude-code", "--arm", skill, *common,
-                                      "--model", model, "--hosted", "--skill", *out(skill)]))  # fmt: skip
+        if task1:
+            skill = f"claude-code-skill-{tag}"
+            steps.append(Step(skill, [], ["harness", "--harness", "claude-code", "--arm", skill, *common,
+                                          "--model", model, "--hosted", "--skill", *out(skill)]))  # fmt: skip
     return steps
 
 
