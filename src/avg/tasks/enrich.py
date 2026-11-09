@@ -117,6 +117,10 @@ DESCRIBE = f"""You write the description for a product record: {MIN_WORDS} to {M
 and factual, in your own words rather than the listing's, claiming nothing the listing does not
 support. Reply with the description text only."""
 
+# Repair rounds per stage. Each round goes only to the items still failing, and each is one batch.
+# Three, as a pipeline would retry a step: the agent may take up to eight turns to fix its record.
+ROUNDS = 3
+
 
 @dataclass
 class Models:
@@ -149,10 +153,12 @@ async def graph(
     no_thinking: frozenset[str] = frozenset(),
 ) -> dict[str, dict]:
     """extract (small) → validate (code) → repair the failures (large) → describe (small) →
-    validate → repair the failures again (large). Each step runs over every item before the
-    next starts, which is what lets every model step be one batch. Returns id → record for the
-    items that came out valid; `reasons`, if given, gets why each other item dropped out.
-    Steps named in `no_thinking` run with thinking off whatever the run's condition."""
+    validate → fix the failures (a description that alone fails is written again, small; anything
+    else is repaired, large). Each validate-and-fix repeats up to ROUNDS times, on the items still
+    failing. Each step runs over every item before the next starts, which is what lets every model
+    step be one batch. Returns id → record for the items that came out valid; `reasons`, if given,
+    gets why each other item dropped out. Steps named in `no_thinking` run with thinking off
+    whatever the run's condition."""
     if unknown := no_thinking - set(STEPS):
         raise ValueError(f"no such graph step: {', '.join(sorted(unknown))}")
     think = {s: s not in no_thinking for s in STEPS}
@@ -173,26 +179,35 @@ async def graph(
             (await client.chat(arm, TASK, it.id, models.large, msg, think=think["repair"])).get("content")
         )
 
-    async def describe(it: Item, record: dict):
+    async def describe(it: Item, record: dict, errors: list[str] | None = None):
         attrs = {k: record.get(k) for k in ("category", "brand", "color", "specs")}
-        msg = [
-            {"role": "system", "content": DESCRIBE},
-            {"role": "user", "content": f"{it.listing()}\n\nAttributes:\n{json.dumps(attrs)}"},
-        ]
+        user = f"{it.listing()}\n\nAttributes:\n{json.dumps(attrs)}"
+        if errors:
+            user += f"\n\nYour last description was:\n{record.get('description')}\n\nIt failed because:\n"
+            user += "\n".join(f"- {e}" for e in errors)
+        msg = [{"role": "system", "content": DESCRIBE}, {"role": "user", "content": user}]
         reply = await client.chat(arm, TASK, it.id, models.small, msg, think=think["describe"])
         return (reply.get("content") or "").strip()
+
+    async def fix(it: Item, record, errors: list[str]):
+        # A record whose only fault is its description needs a new description, not a repair.
+        if isinstance(record, dict) and all(e.startswith("description ") for e in errors):
+            return {**record, "description": await describe(it, record, errors)}
+        return await repair(it, record, errors)
 
     by_id = {it.id: it for it in items}
     records: dict[str, object] = dict(
         zip(by_id, await _gather(limit, (_safe(extract(it)) for it in items)), strict=True)
     )
-    await _repair_pass(limit, by_id, records, repair, partial=True)
+    for _ in range(ROUNDS):
+        await _repair_pass(limit, by_id, records, repair, partial=True)
 
     ready = [i for i, r in records.items() if i in by_id and not by_id[i].check(r, partial=True)]
     texts = await _gather(limit, (_safe(describe(by_id[i], records[i])) for i in ready))
     for i, text in zip(ready, texts, strict=True):
         records[i] = {**records[i], "description": text}
-    await _repair_pass(limit, {i: by_id[i] for i in ready}, records, repair, partial=False)
+    for _ in range(ROUNDS):
+        await _repair_pass(limit, {i: by_id[i] for i in ready}, records, fix, partial=False)
     out = {i: r for i, r in records.items() if i in by_id and isinstance(r, dict) and not by_id[i].check(r)}
     if reasons is not None:
         done = set(ready)
@@ -209,6 +224,7 @@ async def graph(
 
 
 async def _repair_pass(limit, items: dict[str, Item], records: dict, repair, partial: bool) -> None:
+    """One round: `repair` every item whose record fails, all at once. None failing, no requests."""
     failed = {i: it.check(records.get(i), partial) for i, it in items.items()}
     failed = {i: e for i, e in failed.items() if e}
     fixed = await _gather(limit, (_safe(repair(items[i], records.get(i), e)) for i, e in failed.items()))

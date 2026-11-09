@@ -125,6 +125,8 @@ def shape(arm: str) -> str:
         return "Workflow graph; every step on one model"
     if arm.startswith("agent-"):
         return "One tool-calling agent per item"
+    if harness.harness_of(arm) and "-skill" in arm:
+        return "Agent harness handed the whole input file, with a skill for the task"
     if harness.harness_of(arm):
         return "Agent harness handed the whole input file"
     return "–"

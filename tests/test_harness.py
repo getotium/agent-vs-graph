@@ -95,3 +95,18 @@ def test_invocations_are_isolated(tmp_path, monkeypatch):
         assert "sk-real-key" not in json.dumps(inv.env) + json.dumps(inv.argv), "no credential is passed on"
         assert "CLAUDECODE" not in inv.env
         assert inv.cwd == tmp_path
+
+
+def test_the_skill_workspace_holds_the_spec_in_a_skill_and_the_request_stays_plain(tmp_path):
+    ws = harness.workspace(tmp_path / "ws", ITEMS, skill=True)
+    assert not (ws / "TASK.md").exists(), "the request is the prompt, not a task file"
+    skill = ws / harness.SKILL_DIR
+    md = (skill / "SKILL.md").read_text(encoding="utf-8")
+    assert md.startswith("---\nname: enrich-products\ndescription: ") and "Home & Kitchen" in md
+    assert harness.SKILL_DIR + "/validate.py" in md, "the skill names its own validator"
+    run = subprocess.run([sys.executable, f"{harness.SKILL_DIR}/validate.py"], cwd=ws, capture_output=True,
+                         text=True, check=False)  # fmt: skip
+    assert run.returncode == 1 and "p1: missing" in run.stdout, "it runs from the workspace, against its files"
+
+    inv = harness.claude_code(ws, "http://m", "claude-haiku-5-5", 10, prompt=harness.SKILL_PROMPT)
+    assert inv.argv[inv.argv.index("-p") + 1] == "Enrich the product listings in products.jsonl."

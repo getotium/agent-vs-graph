@@ -120,7 +120,13 @@ def test_claude_code_runs_only_where_its_thinking_matches_the_condition():
     off = serial.hosted_plan(cfg, "claude-haiku-5-5", "off")
     assert [s.arm for s in off] == ["graph-haiku", "agent-haiku"], "Claude Code cannot turn thinking off"
     shipped = serial.hosted_plan(cfg, "claude-haiku-5-5", "default")
-    assert [s.arm for s in shipped] == ["graph-haiku", "graph-haiku-lean", "agent-haiku", "claude-code-haiku"]
+    assert [s.arm for s in shipped] == [
+        "graph-haiku",
+        "graph-haiku-lean",
+        "agent-haiku",
+        "claude-code-haiku",
+        "claude-code-skill-haiku",
+    ]
     assert shipped[0].argv[shipped[0].argv.index("--thinking") + 1] == "default"
     lean = shipped[1].argv
     assert lean[lean.index("--no-thinking") + 1] == "describe" and "--no-thinking" not in shipped[0].argv
@@ -176,7 +182,7 @@ def test_thinking_tokens_are_recorded_when_the_server_reports_them():
 def test_the_hosted_plan_needs_no_servers_and_never_carries_the_key():
     steps = serial.hosted_plan(serial.hosted_config("h1", 50, 4, 8788), "claude-haiku-5-5", "default")
     assert all(s.servers == [] for s in steps)
-    assert "--wire" in steps[0].argv and "--hosted" in steps[-1].argv
+    assert "--wire" in steps[0].argv and "--hosted" in steps[-1].argv and "--skill" in steps[-1].argv
     assert all("http://127.0.0.1:8788" in s.argv for s in steps), "its own meter port, clear of a local run's"
     assert not any(a.startswith("sk-") for s in steps for a in s.argv)
 

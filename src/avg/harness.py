@@ -48,6 +48,39 @@ The task is done when `python validate.py` reports that every record is valid.
 
 PROMPT = "Do the task described in TASK.md in the current directory."
 
+# The skill arm: the request as a person would make it, and what a careful agent builder would
+# package for the job as a Claude Code skill: the spec, a way of working, and the validator beside
+# it. Written once, before it was run, as the agent side's one round of tuning (the graph's was its
+# repair rounds); see docs/design.md.
+SKILL_PROMPT = "Enrich the product listings in products.jsonl."
+SKILL_DIR = ".claude/skills/enrich-products"
+SKILL_MD = f"""---
+name: enrich-products
+description: Turn product listings (products.jsonl) into validated catalog records (records.jsonl). Use when asked to enrich, catalog or clean up product listings.
+---
+
+# Enriching product listings
+
+`products.jsonl` has one listing per line: JSON with "id", "title", "bullets" and "description".
+Write one catalog record per product to `records.jsonl`, one line of JSON each:
+
+    {{"id": "<the product's id>", "record": {{...}}}}
+
+{RECORD_SPEC}
+
+## How to work
+
+1. Count the products first; do not print the whole file.
+2. Work in batches of about 20: read a batch (`sed -n '1,20p' products.jsonl`), write its records
+   yourself, and append them in one command. Write every description and spec value yourself from
+   the listing. Never build them in code from the listing's text: the validator rejects copying.
+3. After each batch, run `python {SKILL_DIR}/validate.py`. It lists every product without a
+   record as missing, so until the end filter that out (`| grep -v missing`). Fix only what it
+   reports, by appending a corrected line: the last line for an id counts. Leave valid records alone.
+4. Stay clear of the limits: descriptions of 25 to 50 words, spec values of a few words.
+5. You are done when the validator reports every record valid.
+"""
+
 VALIDATE_PY = '''"""Checks records.jsonl against products.jsonl. Run: python validate.py"""
 
 import json
@@ -94,16 +127,23 @@ _BASE_ENV = ("PATH", "PATHEXT", "SYSTEMROOT", "SYSTEMDRIVE", "WINDIR", "COMSPEC"
              "HOME", "USERPROFILE", "APPDATA", "LOCALAPPDATA", "PROGRAMDATA", "PROGRAMFILES", "LANG")  # fmt: skip
 
 
-def workspace(root: Path, items: list[Item]) -> Path:
-    """A fresh workspace at `root` (emptied if it exists) with the task's files."""
+def workspace(root: Path, items: list[Item], skill: bool = False) -> Path:
+    """A fresh workspace at `root` (emptied if it exists) with the task's files: TASK.md and the
+    validator, or with `skill` the enrich-products skill holding the spec and the validator."""
     if root.exists():
         shutil.rmtree(root)
     root.mkdir(parents=True)
     with (root / "products.jsonl").open("w", encoding="utf-8", newline="\n") as f:
         f.writelines(json.dumps(it.public(), ensure_ascii=False) + "\n" for it in items)
-    (root / "TASK.md").write_text(TASK_MD, encoding="utf-8", newline="\n")
-    (root / "validate.py").write_text(VALIDATE_PY, encoding="utf-8", newline="\n")
-    shutil.copyfile(record_module.__file__, root / "record.py")
+    tools = root
+    if skill:
+        tools = root / SKILL_DIR
+        tools.mkdir(parents=True)
+        (tools / "SKILL.md").write_text(SKILL_MD, encoding="utf-8", newline="\n")
+    else:
+        (root / "TASK.md").write_text(TASK_MD, encoding="utf-8", newline="\n")
+    (tools / "validate.py").write_text(VALIDATE_PY, encoding="utf-8", newline="\n")
+    shutil.copyfile(record_module.__file__, tools / "record.py")
     return root
 
 
@@ -137,7 +177,13 @@ def _env(extra: dict[str, str]) -> dict[str, str]:
 
 
 def claude_code(
-    root: Path, base_url: str, model: str, max_turns: int, binary: str = "claude", api_key: str = ""
+    root: Path,
+    base_url: str,
+    model: str,
+    max_turns: int,
+    binary: str = "claude",
+    api_key: str = "",
+    prompt: str = PROMPT,
 ) -> Invocation:
     """Claude Code headless (`claude -p`), every model it uses pointed at `model` through the meter,
     including the small model it calls for side tasks: those requests are part of its cost. With
@@ -157,7 +203,7 @@ def claude_code(
         "CLAUDE_CONFIG_DIR": str(home),
         "CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC": "1",
     })  # fmt: skip
-    argv = [binary, "-p", PROMPT, "--output-format", "json", "--permission-mode", "bypassPermissions",
+    argv = [binary, "-p", prompt, "--output-format", "json", "--permission-mode", "bypassPermissions",
             "--model", model, "--max-turns", str(max_turns)]  # fmt: skip
     return Invocation(argv, env, root)
 

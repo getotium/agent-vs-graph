@@ -94,6 +94,34 @@ build it.
   is built to favor the agent.
 - **Pull requests that make an agent arm cheaper without hurting its score are welcome.**
 
+### One round of tuning per side, then frozen
+
+The request an agent gets stays loose, as a person would write it: taking a loose request is what
+an agent is for, and tightening it would remove the thing being measured. Tuning belongs to the
+builder's side, which both shapes have: a graph's steps, prompts and retries; an agent's system
+prompt, tools and skills. Each side got one round, decided and written here before it ran:
+
+- **The graph: repair rounds.** The first graph repaired a failed record once per stage, while the
+  agent may take up to eight turns to fix its own. No pipeline gives up after one failed fix, and
+  in the first Haiku thinking-off run 14 of the 15 items only the agent got right were graph
+  records left invalid by that one repair. The graph now validates and fixes up to three rounds
+  per stage, each round going only to the items still failing, and a record whose only fault is
+  its description gets a new description from the describe step rather than a full repair. This
+  is still fixed control flow: code decides each step and the retries are capped, so the cost
+  stays bounded and every round can be a batch.
+- **The agent: a skill.** `claude-code-skill-<model>` is Claude Code given a plain request
+  ("Enrich the product listings in products.jsonl.") and an `enrich-products` skill: the record
+  spec, a way of working (batches of about 20, validate after each, fix only what failed, stay
+  clear of the limits) and the validator beside it, as a careful builder would package the job.
+  The plain `claude-code` arm, handed TASK.md, stays beside it.
+
+After this round both sides are frozen. A later change to either is a bug fix or a new labelled
+variant, recorded here with its reason; results published before a change stay published.
+
+A skill that spells out the procedure is a workflow written in prose, which the agent still
+decides turn by turn whether to follow, re-reading it as it goes. How far that closes the gap is
+part of the result.
+
 ## Statistics
 
 Each arm's mean cost per item carries a 90% bootstrap interval: how sure the sample makes us of
@@ -143,8 +171,9 @@ count that keeps a local run to hours.
 
 1. **Product enrichment.** Listings from Amazon's Shopping Queries Dataset (ESCI, Apache-2.0) →
    category, brand, color, specs and a short description as validated JSON. The graph extracts,
-   validates, repairs only the failures and describes. ESCI was chosen for real, messy listings
-   with brand and color as partial gold; the sample is filtered to general merchandise
+   validates, repairs only the failures (up to three rounds) and describes. ESCI was chosen for
+   real, messy listings with brand and color as partial gold; the sample is filtered to general
+   merchandise
    ([data/enrich/README.md](../data/enrich/README.md)).
 2. **Repository review** (planned): a pinned set of small public repositories → per-file
    summaries → per-repository findings → one report. Scored by a fixed rubric with a judge model,

@@ -206,6 +206,30 @@ def graph_model(req) -> dict:
     raise AssertionError(f"unexpected prompt: {sys_[:40]}")
 
 
+def short_then_good(req) -> dict:
+    """Clean attributes; Bolt's first description is too short, its second (told why) is fine."""
+    sys_, user = system(req), req["messages"][-1]["content"]
+    if sys_ == enrich.DESCRIBE:
+        retry = "It failed because" in user
+        return {"role": "assistant", "content": "Too short." if "Bolt" in user and not retry else GOOD["description"]}
+    if sys_ == enrich.EXTRACT:
+        return {"role": "assistant", "content": json.dumps({k: v for k, v in GOOD.items() if k != "description"})}
+    raise AssertionError(f"unexpected prompt: {sys_[:40]}")
+
+
+def never_fixed(req) -> dict:
+    """Bolt's category is wrong and every repair leaves it wrong."""
+    sys_, user = system(req), req["messages"][-1]["content"]
+    attrs = {k: v for k, v in GOOD.items() if k != "description"}
+    if sys_ in (enrich.EXTRACT, enrich.REPAIR):
+        if "Bolt" in user.split("Record:")[0]:
+            attrs["category"] = "Kettles"
+        return {"role": "assistant", "content": json.dumps(attrs)}
+    if sys_ == enrich.DESCRIBE:
+        return {"role": "assistant", "content": GOOD["description"]}
+    raise AssertionError(f"unexpected prompt: {sys_[:40]}")
+
+
 def agent_model(req) -> dict:
     """First turn validates a bad record, second submits a good one: the loop's normal path."""
     turn = sum(m["role"] == "assistant" for m in req["messages"]) + 1
@@ -252,6 +276,24 @@ async def test_graph_repairs_only_the_failure_and_routes_by_size(rig):
     assert per_item["p1"] == ["small", "small"], "extract and describe; nothing to repair"
     assert sorted(per_item["p2"]) == ["large", "small", "small"], "plus one repair, on the large model"
     assert {(r.run, r.arm, r.task) for r in recs} == {("r1", "graph", "enrich")}
+
+
+async def test_a_failed_description_is_written_again_not_repaired(rig):
+    client, path = await rig(short_then_good, models=["small", "large"])
+    records = await enrich.graph(client, "graph", ITEMS, enrich.Models("small", "large"))
+    assert set(records) == {"p1", "p2"}
+    p2 = [r.model for r in ledger.read([path]) if r.item == "p2"]
+    assert p2 == ["small", "small", "small"], "extract, describe, describe again; the large model never called"
+
+
+async def test_repairs_stop_after_their_rounds(rig):
+    client, path = await rig(never_fixed, models=["small", "large"])
+    reasons: dict[str, str] = {}
+    records = await enrich.graph(client, "graph", ITEMS, enrich.Models("small", "large"), reasons=reasons)
+    assert set(records) == {"p1"}
+    p2 = [r.model for r in ledger.read([path]) if r.item == "p2"]
+    assert p2 == ["small"] + ["large"] * enrich.ROUNDS, "a bounded retry, then the item is dropped"
+    assert reasons["p2"].startswith("attributes: category")
 
 
 class Listening:

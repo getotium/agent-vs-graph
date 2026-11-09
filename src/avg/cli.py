@@ -247,6 +247,11 @@ def main(argv: list[str] | None = None) -> int:
                    "outside any repository so no CLAUDE.md is picked up")  # fmt: skip
     h.add_argument("--out", type=Path, required=True, help="results file (.jsonl)")
     h.add_argument(
+        "--skill",
+        action="store_true",
+        help="claude-code: the enrich-products skill and a plain request, instead of TASK.md",
+    )
+    h.add_argument(
         "--hosted",
         action="store_true",
         help="claude-code against the hosted API: the meter forwards to Anthropic with ANTHROPIC_API_KEY",
@@ -336,7 +341,9 @@ def main(argv: list[str] | None = None) -> int:
         arm = a.arm or a.harness
         items = enrich.load(a.items)[: a.limit or None]
         root = a.workspace or Path(tempfile.gettempdir()) / "avg-ws" / a.run / arm
-        ws = harness.workspace(root, items)
+        if a.skill and a.harness != "claude-code":
+            raise SystemExit("--skill is a Claude Code skill")
+        ws = harness.workspace(root, items, skill=a.skill)
         base = f"{a.meter.rstrip('/')}/t/{a.run}/{arm}/{enrich.TASK}/all"
         make = harness.HARNESSES[a.harness]
         if a.hosted and a.harness != "claude-code":
@@ -344,6 +351,8 @@ def main(argv: list[str] | None = None) -> int:
         kw = {"binary": a.bin} if a.bin else {}
         if a.hosted:
             kw["api_key"] = _key("anthropic")
+        if a.skill:
+            kw["prompt"] = harness.SKILL_PROMPT
         inv = make(ws, base, a.model, a.max_turns, **kw)
         started = time.monotonic()
         code = harness.run(inv, a.timeout)

@@ -139,6 +139,9 @@ def hosted_plan(c: Config, model: str, thinking: str = "off", tag: str = "haiku"
                                                    *out(f"{graph}-lean")]))  # fmt: skip
         steps.append(Step(code, [], ["harness", "--harness", "claude-code", "--arm", code, *common, "--model", model,
                                      "--hosted", *out(code)]))  # fmt: skip
+        skill = f"claude-code-skill-{tag}"
+        steps.append(Step(skill, [], ["harness", "--harness", "claude-code", "--arm", skill, *common,
+                                      "--model", model, "--hosted", "--skill", *out(skill)]))  # fmt: skip
     return steps
 
 
