@@ -1,0 +1,10 @@
+{
+  "limit": 500,
+  "slots": 4,
+  "thinking": "model default",
+  "max_tokens": 4096,
+  "provider": "anthropic",
+  "model": "claude-haiku-5-5",
+  "anthropic_version": "2023-06-01",
+  "code": "4b26f5e44514"
+}
