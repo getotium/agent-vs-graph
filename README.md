@@ -8,12 +8,44 @@ It is not trying to show that one shape always wins. Agents are the right tool w
 are not known in advance; graphs are cheaper when they are. The point is to measure where the
 line is and how much it is worth, so you can pick the right shape for your own work.
 
-> **Status: in development.** Task 1 (product enrichment) runs on every arm locally, and its
-> first 500-item run is published in [`results/`](results/); the other tasks come next (see
-> [Plan](#plan)). Small development runs are not results and are not published.
+> **Status: in development.** Task 1 (product enrichment) and catalog intake (task 1 with rejects)
+> are published in [`results/`](results/), locally on Gemma 4 and hosted on Claude Haiku 5.5. The
+> other tasks come next (see [Plan](#plan)). Small development runs are not results and are not
+> published.
 
 Why it is built this way, and the decisions behind it: [docs/design.md](docs/design.md).
 What a published report's tables and columns mean: [docs/reading-reports.md](docs/reading-reports.md).
+
+## Results so far
+
+From the runs in [`results/`](results/), 500 items each, after one round of tuning per side.
+Costs are per 1,000 items at Claude Haiku 5.5's published prices; "batch" is the same tokens at
+the batch discount, which only the graph can take. Each figure is one run.
+
+| Run | Success, graph vs agent | Paired p | Graph, real-time | Agent, real-time | Graph, batch |
+| --- | --- | ---: | ---: | ---: | ---: |
+| [`big-final-think`](results/big-final-think/report.md): Gemma 4 12B, thinking on | 97% vs 95% | 0.012 | $1.25 | $0.88 | $0.62 |
+| [`big-final-off`](results/big-final-off/report.md): Gemma 4 12B, thinking off | 94% vs 90% | < 0.001 | $0.22 | $0.29 | $0.11 |
+| [`h-final`](results/h-final/report.md): Haiku 5.5, model default | 97% vs 96% | 0.62 | $0.66 | $0.53 | $0.33 |
+| [`h-final-off`](results/h-final-off/report.md): Haiku 5.5, thinking off | 96% vs 96% | – | $0.43 | $0.43 | $0.22 |
+| [`h-intake2-20`](results/h-intake2-20/report.md): intake, 20% rejects, gated graph | 97% vs 97% | 0.39 | $1.43 | $1.50 | $0.72 |
+| [`h-intake2-85`](results/h-intake2-85/report.md): intake, 85% rejects, gated graph | 96% vs 96% | 0.77 | $0.37 | $0.45 | $0.18 |
+
+What they show so far:
+
+- **The graph was never significantly less accurate.** On the 12B it was more accurate, with
+  thinking on and off; on Haiku every comparison is a tie.
+- **At real-time prices neither shape is reliably cheaper.** The agent's repeated context caches
+  well, and the graph's short, separate prompts barely do. In batch, the graph cost 27–62% less
+  than the agent in every run.
+- **Thinking can be set per step only in a graph.** The lean graph, thinking off for the
+  description alone, kept the 12B's 97% at $0.85 real-time ($0.42 batch).
+- **The whole-file harness cost the most.** Claude Code on task 1 cost $1.01 against the agent's
+  $0.53, at the same 96%; with a skill for the task, $3.27 and 94%.
+- **Early exit pays when it comes before the expensive step.** The agent stops early on its own.
+  The first intake graph rejected items only after a full extract and cost $0.65 at 85% rejects;
+  the gated graph, its round of tuning, checks first and costs $0.37. Why, and the untuned graph's
+  numbers: [docs/design.md](docs/design.md#catalog-intake).
 
 ## What is compared
 
@@ -130,7 +162,9 @@ in a scratch workspace with an empty config home, no credentials, and only the m
 Haiku 5.5 on Anthropic's API (arms `graph-haiku`, `agent-haiku`, `claude-code-haiku`). Put the
 key in `.env.local` as `ANTHROPIC_API_KEY=...`; the file is gitignored and only the Taskfile reads
 it. The meter sits in front of the API as before, on its own port, so a local run can go on at
-the same time. Thinking is off, matching the local thinking-off runs.
+the same time. Thinking is off by default, matching the local thinking-off runs; `THINKING=default`
+leaves it to the model. `INTAKE=20` or `INTAKE=85` runs catalog intake on that mix instead of
+task 1, for `task serial` too.
 
 The inputs are 1,000 listings from Amazon's Shopping Queries dataset, Apache-2.0; see
 [data/enrich/README.md](data/enrich/README.md) for the attribution and how the sample is drawn.
@@ -139,12 +173,15 @@ The inputs are 1,000 listings from Amazon's Shopping Queries dataset, Apache-2.0
 
 1. The meter, ledger, price sheets and report. **Done.**
 2. Task 1, product enrichment over a public catalog (Amazon's Shopping Queries dataset,
-   Apache-2.0), all arms, a small sample. **Built; first development runs done.**
-3. Task 2 (repository review) and task 3 (a cited research brief over a fixed corpus), and a task
+   Apache-2.0), all arms. **Done.**
+3. The full local runs and their reports, committed with the ledgers. **Done:** task 1 at 500
+   items, thinking on and off.
+4. The hosted check on Claude Haiku 5.5. **Done:** task 1, thinking off and at the model's
+   default.
+5. Catalog intake, task 1 with rejects, to measure early exit. **Done:** hosted, at 20% and 85%
+   rejects.
+6. Task 2 (repository review) and task 3 (a cited research brief over a fixed corpus), and a task
    whose steps are open-ended, where an agent should win.
-4. The full local run and its report, committed with the ledger. **Task 1 at 500 items, thinking
-   off, is in [`results/`](results/); thinking on is running.**
-5. The hosted check.
 
 Prompts, tool schemas and graph definitions will all be in this repo. If you can make an agent
 arm cheaper without hurting its score, open a pull request: a better agent makes a better
