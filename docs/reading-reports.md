@@ -31,6 +31,7 @@ An arm's name says its shape and its model:
 | --- | --- |
 | `graph-<model>` | A workflow graph: fixed steps, each run over every item, every step on that model. |
 | `graph` | The same graph with the easy steps (extract, describe) on the small model and repairs on the large one. |
+| `graph-<model>-gated` | Catalog intake only: the graph with a cheap sort step first and loose brand matching, its round of tuning ([why](design.md#catalog-intake)). |
 | `graph-<model>-lean` | `graph-<model>` with thinking off for its describe step, in runs where thinking is on ([why](design.md#the-arms)). |
 | `agent-<model>` | One tool-calling agent per item on that model, deciding its own steps, with the validator as a tool. |
 | `claude-code`, `hermes` | A general-purpose agent harness handed the whole input file at once, with the task in TASK.md. |

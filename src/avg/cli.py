@@ -93,7 +93,7 @@ async def _intake(a: argparse.Namespace, client: Client, items: list[enrich.Item
     catalog, policy = intake.load_catalog(catalog_path), intake.load_policy(policy_path)
     if a.shape == "graph":
         models = enrich.Models(small=a.small or a.model, large=a.large or a.model)
-        got = await intake.graph(client, a.arm, items, models, catalog, policy, limit=a.concurrency)
+        got = await intake.graph(client, a.arm, items, models, catalog, policy, limit=a.concurrency, gate=a.gate)
         return [{"arm": a.arm, "id": it.id, "record": got.get(it.id, {}).get("record"),
                  "skip": got.get(it.id, {}).get("skip")} for it in items]  # fmt: skip
 
@@ -266,6 +266,11 @@ def main(argv: list[str] | None = None) -> int:
         default="",
         metavar="STEP,STEP",
         help=f"graph: steps run with thinking off whatever the run's condition ({', '.join(enrich.STEPS)})",
+    )
+    r.add_argument(
+        "--gate",
+        action="store_true",
+        help="intake graph: sort first (brand, book, model; thinking off) and match brands loosely",
     )
     r.add_argument(
         "--task",

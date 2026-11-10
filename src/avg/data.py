@@ -129,6 +129,15 @@ MEDIA = re.compile(
     re.IGNORECASE,
 )
 ISBN = re.compile(r"\d{9}[\dX]")
+# An ISBN-10 product id is not enough to make a book: card games, playing cards and the odd charger
+# carry one too. A book's listing must also say it is one.
+BOOKISH = re.compile(
+    r"\b(books?|novels?|paperback|hardcover|hardback|author|authors|edition|chapters?|pages|cookbook|"
+    r"stories|memoir|biography|bestsell\w*|readers?)\b",
+    re.IGNORECASE,
+)
+# ...and its title must not name something else: a book-and-toy kit is no clear call either way.
+NOT_BOOK = re.compile(r"\b(toys?|games?|cards|kits?|puzzles?|masks?|stickers|dolls?|figures?)\b", re.IGNORECASE)
 MIXES = {20: 0.20, 85: 0.85}  # file suffix → share of the feed that should be rejected
 SPLIT = {"catalog_duplicate": 0.30, "feed_duplicate": 0.20, "excluded_brand": 0.25}  # the rest: books
 EXCLUDED_BRANDS = 12
@@ -137,12 +146,14 @@ POOL = 40_000  # qualifying listings sampled (lowest seeded hash) to build every
 
 
 def book(row: dict) -> dict | None:
-    """A US listing whose product id is an ISBN-10: a book, the store's excluded kind."""
+    """A US listing whose product id is an ISBN-10 and whose text says it is a book: the store's
+    excluded kind."""
     if row.get("product_locale") != "us" or not ISBN.fullmatch(row.get("product_id") or ""):
         return None
     title = clean_text(row.get("product_title"), 300)
     bullets, desc = clean_text(row.get("product_bullet_point")), clean_text(row.get("product_description"))
-    if not (title and (bullets or desc)) or BLOCKED.search(f"{title} {bullets} {desc}"):
+    text = f"{title} {bullets} {desc}"
+    if not (title and (bullets or desc)) or BLOCKED.search(text) or not BOOKISH.search(text) or NOT_BOOK.search(title):
         return None
     brand = (row.get("product_brand") or "").strip()
     return {"id": row["product_id"], "title": title, "bullets": bullets, "description": desc,
@@ -167,13 +178,16 @@ def relist(it: dict, rng) -> dict:
 
 
 def intake_pools(rows: Iterable[dict], seed: int = 1) -> tuple[list[dict], list[dict]]:
-    """The listings every mix is built from: qualifying task 1 items with nothing media-like, and
-    books. Seeded hash order, so the same pools come out however the rows arrive."""
+    """The listings every mix is built from: qualifying task 1 items with nothing media-like and no
+    ISBN for an id (a cookbook need not say "book"), and books. A listing with an ISBN that does not
+    read as a book is in neither. Seeded hash order, so the same pools come out however the rows
+    arrive."""
     items: list[tuple[int, str, dict]] = []
     books: list[tuple[int, str, dict]] = []
     for row in rows:
         it = item(row)
-        if it is not None and not MEDIA.search(f"{it['title']} {it['bullets']} {it['description']}"):
+        isbn = ISBN.fullmatch(row.get("product_id") or "")
+        if it is not None and not isbn and not MEDIA.search(f"{it['title']} {it['bullets']} {it['description']}"):
             heap, cap = items, POOL
         else:
             it = book(row)

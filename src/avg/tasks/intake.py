@@ -59,6 +59,13 @@ def norm(s: object) -> str:
     return re.sub(r"[^a-z0-9]", "", str(s).lower()) if s else ""
 
 
+def same_brand(a: object, b: object) -> bool:
+    """Equal, or one contains the other ("P PURLOVE" and "PURLOVE"): the agent's catalog lookup's
+    rule, given to the gated graph."""
+    x, y = norm(a), norm(b)
+    return bool(x and y) and (x == y or (min(len(x), len(y)) >= 3 and (x in y or y in x)))
+
+
 def check(record: object, it: Item) -> list[str]:
     """The shared validator for a full intake record: task 1's record plus its page content."""
     return validate(record, listing=listing_text(it.public()), content=True)
@@ -107,6 +114,11 @@ def score(items: list[Item], rows: dict[str, dict]) -> Scores:
 
 # ---- the graph ----------------------------------------------------------------------------------
 
+SORT = """You sort a product listing before anything else is done with it. Reply with one JSON object
+and nothing else, with the keys "brand": the product's brand as the listing gives it, or null;
+"book": true if the product is a book (printed or audio), otherwise false; and "model": its model
+or part number as a string, or null if the listing gives none."""
+
 EXTRACT = f"""You turn a product listing into catalog attributes. Reply with one JSON object and
 nothing else: the keys "category", "brand", "color" and "specs" as described below (no description),
 and "model": the product's model or part number as a string, or null if the listing gives none.
@@ -154,15 +166,28 @@ async def graph(
     catalog: list[dict],
     policy: dict,
     limit: int = 4,
+    gate: bool = False,
 ) -> dict[str, dict]:
     """extract (small) → the rules, in code: an excluded brand or a book stops here → repair what is
     still invalid (large) → match the catalog and the rest of the feed: same-brand entries ranked by
     shared title words, the top few to one compare step (small) → write the content (small) for what
     is left → validate and fix, up to ROUNDS rounds. Every step runs over every item first, so the
-    feed match sees the whole feed. Returns id → {"record": ...} or {"skip": ...}."""
+    feed match sees the whole feed. Returns id → {"record": ...} or {"skip": ...}.
+
+    `gate` is the graph's one round of tuning (docs/design.md, "Catalog intake"): a sort step
+    (small, thinking off) reads only the brand, whether it is a book and the model; the rules and
+    the match run on that, so a reject stops before the full extract; and brands match as
+    `same_brand`, not only when equal."""
     by_id = {it.id: it for it in items}
-    excluded = {norm(b) for b in policy["excluded_brands"]}
+    excluded = [norm(b) for b in policy["excluded_brands"]]
     out: dict[str, dict] = {}
+
+    def excluded_brand(brand: object) -> bool:
+        return any(same_brand(brand, e) for e in excluded) if gate else norm(brand) in excluded
+
+    async def sort(it: Item):
+        msg = [{"role": "system", "content": SORT}, {"role": "user", "content": it.listing()}]
+        return parse_json((await client.chat(arm, TASK, it.id, models.small, msg, think=False)).get("content"))
 
     async def extract(it: Item):
         msg = [{"role": "system", "content": EXTRACT}, {"role": "user", "content": it.listing()}]
@@ -203,14 +228,48 @@ async def graph(
         return await repair(it, record, errors)
 
     def ruled_out(record) -> bool:
-        return isinstance(record, dict) and (norm(record.get("brand")) in excluded or record.get("category") == BOOKS)
+        return isinstance(record, dict) and (excluded_brand(record.get("brand")) or record.get("category") == BOOKS)
 
-    extracted = await _gather(limit, (_safe(extract(it)) for it in items))
-    records: dict[str, object] = {}
+    # Match: catalog entries and earlier listings in the feed of the same brand.
+    known = list(catalog)
+
+    async def match(survivors: list[Item], seen: dict[str, tuple], model_no: dict[str, str]) -> None:
+        """Skip, as duplicates, the survivors the compare step finds among the catalog and the feed's
+        earlier survivors; feed order, so a later listing is compared with the earlier ones."""
+        pending = []
+        for it in survivors:
+            brand, color = seen.get(it.id, (None, None))
+            if gate:
+                cands = [c for c in known if same_brand(brand, c["brand"])]
+            else:
+                cands = [c for c in known if norm(c["brand"]) == norm(brand)]
+            pending.append((it, _rank(f"{it.title} {model_no.get(it.id, '')}", cands)))
+            known.append({"brand": brand or "", "title": it.title, "color": color})
+        matched = await _gather(limit, (_safe(compare(it, cands)) if cands else _none() for it, cands in pending))
+        for (it, _), m in zip(pending, matched, strict=True):
+            if m is not None:
+                out[it.id] = {"skip": "duplicate"}
+
     model_no: dict[str, str] = {}
-    for it, r in zip(items, extracted, strict=True):
+    todo = items
+    if gate:
+        sorted_ = await _gather(limit, (_safe(sort(it)) for it in items))
+        brand_of: dict[str, tuple] = {}
+        for it, s in zip(items, sorted_, strict=True):
+            if not isinstance(s, dict):
+                continue  # unsorted: the full extract and the rules after it decide
+            if s.get("book") is True or excluded_brand(s.get("brand")):
+                out[it.id] = {"skip": "excluded"}
+            brand_of[it.id], model_no[it.id] = (s.get("brand"), None), str(s.get("model") or "")
+        await match([it for it in items if it.id not in out and it.id in brand_of], brand_of, model_no)
+        todo = [it for it in items if it.id not in out]
+
+    extracted = await _gather(limit, (_safe(extract(it)) for it in todo))
+    records: dict[str, object] = {}
+    for it, r in zip(todo, extracted, strict=True):
         if isinstance(r, dict):
-            model_no[it.id] = str(r.pop("model", "") or "")
+            m = str(r.pop("model", "") or "")
+            model_no.setdefault(it.id, m)
         records[it.id] = r
 
     def apply_rules():
@@ -226,24 +285,19 @@ async def graph(
     for i in [i for i, r in records.items() if validate(r, partial=True, content=True)]:
         del records[i]  # still invalid after its rounds: dropped, neither catalogued nor skipped
 
-    # Match: catalog entries and earlier listings in the feed with the same brand.
-    by_brand: dict[str, list[dict]] = {}
-    for c in catalog:
-        by_brand.setdefault(norm(c["brand"]), []).append(c)
-    pending = []
-    for it in items:  # feed order, so a later listing is compared with the earlier ones
-        r = records.get(it.id)
-        if r is None:
-            continue
-        brand = norm(r.get("brand"))
-        title = f"{it.title} {model_no.get(it.id, '')}"
-        pending.append((it, _rank(title, by_brand.get(brand, []))))
-        by_brand.setdefault(brand, []).append({"brand": r.get("brand"), "title": it.title, "color": r.get("color")})
-    matched = await _gather(limit, (_safe(compare(it, cands)) if cands else _none() for it, cands in pending))
-    for (it, _), m in zip(pending, matched, strict=True):
-        if m is not None:
-            out[it.id] = {"skip": "duplicate"}
-            del records[it.id]
+    if not gate:
+        left = [it for it in items if it.id in records]
+        await match(left, {i: (r.get("brand"), r.get("color")) for i, r in records.items()}, model_no)  # type: ignore[union-attr]
+        for it in left:
+            if it.id in out:
+                del records[it.id]
+    else:
+        # Sorted items were matched before their extract; one the sort could not read is matched now.
+        late = [it for it in items if it.id in records and it.id not in brand_of]
+        await match(late, {it.id: (records[it.id].get("brand"), records[it.id].get("color")) for it in late}, model_no)  # type: ignore[union-attr]
+        for it in late:
+            if it.id in out:
+                del records[it.id]
 
     kept = [by_id[i] for i in records]
     written = await _gather(limit, (_safe(write(it, records[it.id])) for it in kept))

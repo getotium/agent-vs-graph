@@ -147,6 +147,10 @@ def hosted_plan(c: Config, model: str, thinking: str = "off", tag: str = "haiku"
         Step(agent, [], ["run", "--shape", "agent", "--arm", agent, *common, "--model", model, *wire,
                          "--concurrency", n, *out(agent)]),
     ]  # fmt: skip
+    if not task1:  # the intake graph's one round of tuning
+        steps.insert(1, Step(f"{graph}-gated", [], ["run", "--shape", "graph", "--arm", f"{graph}-gated", *common,
+                                                    "--model", model, *wire, "--gate", "--concurrency", n,
+                                                    *out(f"{graph}-gated")]))  # fmt: skip
     if thinking == "default":
         if task1:
             steps.insert(1, Step(f"{graph}-lean", [], ["run", "--shape", "graph", "--arm", f"{graph}-lean", *common,

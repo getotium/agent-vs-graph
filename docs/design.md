@@ -217,9 +217,14 @@ read from its id. Every item is one of:
 - **Hard cases are in on purpose.** The catalog also holds other products of each duplicated
   product's brand, and some new items share a brand with catalog entries, so a brand match is not
   enough: the product has to match.
-- **Books are known by their product id,** which in ESCI is the ISBN-10 for a book; the ids are
-  replaced before any arm sees an item. New items are kept clear of anything that could be read as
-  a book or other media, so a correct exclusion is never scored as a wrong one.
+- **A book is a listing with an ISBN-10 for its ESCI product id whose text also says it is a
+  book** (book, novel, paperback, author, edition and the like), and whose title names nothing else
+  (a toy, a game, a kit, cards). An ISBN alone is not enough: card games, playing cards and a phone
+  charger carry one. The ids are replaced before any arm sees an item. New items have no ISBN for an
+  id and nothing that could be read as a book or other media, so a correct exclusion is never scored
+  as a wrong one. (The first build used the ISBN alone and let ISBN-numbered products into the new
+  items: cookbooks and a novel were scored as products to keep, and games as books. Both arms lost
+  points to it, so it was fixed and the runs made on it are not compared with later ones.)
 - **Two mixes of 500 items:** 20% rejects (`items-20.jsonl`) and 85% rejects (`items-85.jsonl`), each
   with its own `catalog-*.jsonl`. Rejects split 30% catalog duplicates, 20% feed duplicates, 25%
   excluded brands, 25% books. The store's rules (`policy.json`: twelve excluded brands, no books)
@@ -254,6 +259,24 @@ valid record with the right brand, and every listing fails otherwise.
 - **Agent, whole file.** Claude Code handed the feed, the catalog and the rules in TASK.md, with the
   validator, which accepts a skip line (`{"id": ..., "skip": "duplicate" | "excluded"}`) as well as
   a record.
+
+**The graph's one round of tuning** ([the rule](#one-round-of-tuning-per-side-then-frozen)) came
+from the first runs. Two things in it cost the graph, and both were in its design, not its prompts:
+
+- Its early exit came after its most expensive step. The full extract, thinking included, ran on
+  every item before the rules could stop one, so an excluded brand cost the graph about three times
+  what it cost the agent, which reads the brand and calls `skip_item`.
+- Its code matched brands only when equal. "P PURLOVE" found no catalog entries for "PURLOVE" and
+  "Marvel Avengers" was not the excluded "Marvel", so those items went through as new products. The
+  agent's lookup already matched a brand that contains another, and an agent can search again.
+
+The tuned variant, `graph-<model>-gated`, adds a sort step first (small model, thinking off) that
+reads only the brand, whether the item is a book and its model number. The rules and the catalog
+match run on that, so a reject stops before the full extract, and brands match by the agent
+lookup's rule (equal, or one contains the other, at three characters or more). Everything after is
+the graph as it was. Both graphs run, so the report shows the round's effect. The agent's misses in
+the same runs were mostly the book mislabelling above, which the data fix removed; it had no change
+of its own to make.
 
 **What the report adds:** success by kind of item, records written for rejects, and each arm's cost
 split into the cost of a rejected item and of a kept one, so its cost per 1,000 items can be drawn

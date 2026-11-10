@@ -24,9 +24,10 @@ and color moved into `gold`):
   [`src/avg/data.py`](../../src/avg/data.py) (`relist`): title parts reordered with the brand
   moved, bullet points reversed, the description dropped when there are bullets and halved when
   there are not. No model wrote any of it.
-- **Books** are listings whose ESCI product id is an ISBN-10, with the blocklist still applied.
-- **New items** never mention anything that reads as a book or other media, nor an excluded brand,
-  so excluding one is never the right call.
+- **Books** are listings whose ESCI product id is an ISBN-10 and whose text says it is a book,
+  with no toy, game, kit or cards in the title, and the blocklist still applied.
+- **New items** have no ISBN for an id and never mention anything that reads as a book or other
+  media, nor an excluded brand, so excluding one is never the right call.
 
 `gold.kind` is the answer: `new`, `catalog_duplicate`, `feed_duplicate`, `excluded_brand` or
 `excluded_kind`; `gold.group` ties the listings of one product in the same feed together. No arm

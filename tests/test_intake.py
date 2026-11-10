@@ -68,6 +68,22 @@ def test_a_relisting_keeps_the_facts_and_changes_the_words():
     assert r["description"] == "", "dropped when there are bullets"
 
 
+def test_a_book_needs_an_isbn_and_to_read_as_one_and_new_items_have_no_isbn():
+    def row(pid, title, bullets):
+        return {"product_id": pid, "product_locale": "us", "product_title": title, "product_brand": "Acme",
+                "product_color": "Red", "product_bullet_point": f"Acme {bullets}", "product_description": ""}  # fmt: skip
+
+    rows = [
+        row("B000000001", "Acme Kettle", "steel body"),  # an ordinary product
+        row("030759565X", "Acme Kitchen Cookbook: Recipes", "the author's recipes"),  # an ISBN that reads as a book
+        row("1616612177", "Acme Card Game Expansion", "120 new cards"),  # an ISBN on a game: neither
+        row("1591745780", "Acme Design Your Room Toy", "a book of ideas and a kit"),  # reads as both: neither
+    ]
+    pool, books = data.intake_pools(rows)
+    assert [it["id"] for it in pool] == ["B000000001"]
+    assert [it["id"] for it in books] == ["030759565X"]
+
+
 def test_the_mixes_have_their_shares_opaque_ids_and_no_mention_of_excluded_brands():
     pool = [pooled(f"B{b:03d}", k) for b in range(400) for k in range(14)]
     pool.append({**pooled("B001", 99), "title": "B001 case that fits ZZZ phones"})  # names a brand
@@ -155,6 +171,11 @@ def system(req) -> str:
 
 def intake_model(req) -> dict:
     sys_, user = system(req), req["messages"][-1]["content"]
+    if sys_ == intake.SORT:
+        assert req["chat_template_kwargs"] == {"enable_thinking": False}, "the sort step does not think"
+        title = user.split("\n")[0]
+        brand = "Nope Kids" if "Nope" in title else "Press" if "Novel" in title else "Acme Co"  # variants
+        return {"role": "assistant", "content": json.dumps({"brand": brand, "book": "Novel" in title, "model": None})}
     if sys_ == intake.EXTRACT:
         title = user.split("\n")[0]
         brand = "Nope" if "Nope" in title else "Press" if "Novel" in title else "Acme"
@@ -203,6 +224,26 @@ async def test_the_graph_stops_rejects_before_their_content(client):
     assert steps["n1"] == 3, "extract, compare (Acme has entries), write"
 
 
+async def test_the_gated_graph_stops_rejects_before_the_extract_and_matches_brand_variants(client):
+    c, path = client
+    got = await intake.graph(c, "gated", FEED, enrich.Models("m", "m"), CATALOG, POLICY, gate=True)
+    assert {i: r.get("skip") or "record" for i, r in got.items()} == {
+        "n1": "record", "d1": "duplicate", "x1": "excluded", "b1": "excluded", "g1": "record", "g2": "duplicate",
+    }, "'Nope Kids' is excluded and 'Acme Co' finds Acme's catalog entries"  # fmt: skip
+    steps: dict = {}
+    for r in ledger.read([path]):
+        steps[r.item] = steps.get(r.item, 0) + 1
+    assert steps["x1"] == steps["b1"] == 1, "the sort alone"
+    assert steps["d1"] == steps["g2"] == 2, "sort and compare: no extract"
+    assert steps["n1"] == 4, "sort, compare, extract, write"
+
+
+def test_brands_match_loosely_but_not_on_scraps():
+    assert intake.same_brand("P PURLOVE", "PURLOVE") and intake.same_brand("Marvel Avengers", "marvel")
+    assert not intake.same_brand("GE", "Gerber"), "too short to contain"
+    assert not intake.same_brand("", "Acme") and not intake.same_brand(None, None)
+
+
 # ---- the agent's tools -------------------------------------------------------------------------
 
 
@@ -240,6 +281,10 @@ def test_the_intake_workspace_takes_skips_and_records(tmp_path):
     assert harness.collect_rows(ws) == {"n1": {"record": FULL}, "d1": {"skip": "duplicate"}}
 
 
+def steps_of(plan) -> dict:
+    return {s.arm: s.argv for s in plan}
+
+
 def test_intake_plans_carry_the_mix_and_leave_out_task_1_variants():
     cfg = serial.Config(run="r", limit=5, llama_server="ls", device="", small=serial.Server("s", "s.gguf", 1),
                         large=serial.Server("l", "l.gguf", 2), large_harness=serial.Server("l", "l.gguf", 2),
@@ -249,7 +294,8 @@ def test_intake_plans_carry_the_mix_and_leave_out_task_1_variants():
     argv = steps["graph-12b"].argv
     assert argv[argv.index("--task") + 1] == "intake" and argv[argv.index("--items") + 1].endswith("items-20.jsonl")
     hosted = serial.hosted_plan(serial.hosted_config("h", 5, 4, 8788, *serial.intake_items(85)), "m", "default")
-    assert [s.arm for s in hosted] == ["graph-haiku", "agent-haiku", "claude-code-haiku"]
+    assert [s.arm for s in hosted] == ["graph-haiku", "graph-haiku-gated", "agent-haiku", "claude-code-haiku"]
+    assert "--gate" in steps_of(hosted)["graph-haiku-gated"] and "--gate" not in steps_of(hosted)["graph-haiku"]
     assert all("data/intake/items-85.jsonl" in s.argv for s in hosted)
     task1 = serial.plan(replace(cfg, task="enrich"))
     assert "--task" not in task1[0].argv, "task 1's commands are as they were"

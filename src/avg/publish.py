@@ -134,6 +134,8 @@ def shape(arm: str) -> str:
         return "Workflow graph; easy steps on the small model, repairs on the large"
     if arm.startswith("graph-") and arm.endswith("-lean"):
         return "Workflow graph; every step on one model, the description written without thinking"
+    if arm.startswith("graph-") and arm.endswith("-gated"):
+        return "Workflow graph; every step on one model, a cheap sort step first and loose brand matching"
     if arm.startswith("graph-"):
         return "Workflow graph; every step on one model"
     if arm.startswith("agent-"):
