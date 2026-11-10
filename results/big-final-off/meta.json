@@ -1,0 +1,11 @@
+{
+  "limit": 500,
+  "slots": 4,
+  "thinking": 0,
+  "max_tokens": 4096,
+  "llama_server": "llama-b12189",
+  "small": "gemma-4-E4B_q4_0-it.gguf",
+  "large": "gemma-4-12b-it-qat-q4_0.gguf",
+  "harness_ctx": 65536,
+  "code": "10603c4a4025"
+}
