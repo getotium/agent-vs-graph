@@ -157,6 +157,20 @@ def shape(arm: str) -> str:
     return "–"
 
 
+def _costs(meta: dict) -> str:
+    """How to read the money figures: a hosted run's own model was billed for real; the rest is a comparison."""
+    if meta.get("model"):
+        return (
+            f"- **Costs** are per item, as each vendor would bill the run's tokens. The run used {meta['model']} "
+            "through its vendor's API: priced as that model, the figures are what the run cost. Priced as another "
+            "model, they use this model's token counts, so they compare arms like for like rather than quote a bill."
+        )
+    return (
+        "- **Costs** are per item, as each vendor would bill the run's tokens. The run itself was local: token "
+        "counts are the local model's, so they compare arms like for like rather than quote a hosted bill."
+    )
+
+
 def context(run: str, meta: dict, groups: list[report.Group], scores_table: str) -> list[str]:
     """The top of a published report: what the run is, its arms and conditions, how to read the
     numbers, and the scores. Facts and definitions only; what they mean is for the reader."""
@@ -181,10 +195,7 @@ def context(run: str, meta: dict, groups: list[report.Group], scores_table: str)
         "## In brief",
         "",
         SUCCESS.get(meta.get("task", enrich.TASK), SUCCESS[enrich.TASK]),
-        (
-            "- **Costs** are per item, as each vendor would bill the run's tokens. The run itself was local: token "
-            "counts are the local model's, so they compare arms like for like rather than quote a hosted bill."
-        ),
+        _costs(meta),
         "- **Batch** prices apply only to graph arms; an agent's requests wait on each other's answers.",
         "- **Ranges** in brackets are 90% intervals on the average, from resampling the items.",
         "- **Graph against agent** puts the same model in both shapes side by side, item by item.",

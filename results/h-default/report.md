@@ -7,7 +7,7 @@ Read more: [how to read this report](../../docs/reading-reports.md) · [why it i
 ## In brief
 
 - **Success** is a record that passes the shared validator and names the right brand.
-- **Costs** are per item, as each vendor would bill the run's tokens. The run itself was local: token counts are the local model's, so they compare arms like for like rather than quote a hosted bill.
+- **Costs** are per item, as each vendor would bill the run's tokens. The run used claude-haiku-5-5 through its vendor's API: priced as that model, the figures are what the run cost. Priced as another model, they use this model's token counts, so they compare arms like for like rather than quote a bill.
 - **Batch** prices apply only to graph arms; an agent's requests wait on each other's answers.
 - **Ranges** in brackets are 90% intervals on the average, from resampling the items.
 - **Graph against agent** puts the same model in both shapes side by side, item by item.

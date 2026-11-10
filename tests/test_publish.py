@@ -109,3 +109,14 @@ def test_an_arm_without_results_is_refused(tree):
     (runs / "r1" / "agent-12b.jsonl").unlink()
     with pytest.raises(ValueError, match="no results for: agent-12b"):
         run_publish(tree)
+
+
+def test_the_cost_note_says_whether_the_run_was_hosted(tree):
+    local = (run_publish(tree).path / "report.md").read_text(encoding="utf-8")
+    assert "The run itself was local" in local
+    _, runs, _ = tree
+    (runs / "r1" / "meta.json").write_text(json.dumps(META | {"provider": "anthropic", "model": "claude-haiku-5-5"}),
+                                           encoding="utf-8")  # fmt: skip
+    hosted = (run_publish(tree).path / "report.md").read_text(encoding="utf-8")
+    assert "The run used claude-haiku-5-5 through its vendor's API" in hosted
+    assert "The run itself was local" not in hosted
