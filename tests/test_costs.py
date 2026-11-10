@@ -177,3 +177,18 @@ def test_the_local_servers_cache_hits_are_not_priced(sheet):
     [g] = report.group([rec("a", input=100, cache_read=900)])
     units, unknown = g.billed(sheet["claude-haiku-5-5"])
     assert unknown == 1 and units["a"][0].input == 1_000 and units["a"][0].cache_read == 0
+
+
+def test_costs_split_by_kind_and_drawn_across_reject_shares(sheet):
+    haiku = sheet["claude-haiku-5-5"]
+    records = [rec("n1", output=4000), rec("x1", output=1000), rec("d1", output=1000), rec("d1", output=1000),
+               rec("all", arm="claude-code", output=9000)]  # fmt: skip
+    groups = report.group(records, {("t", "claude-code"): 3})
+    kinds = {"n1": "new", "x1": "excluded_brand", "d1": "catalog_duplicate"}
+    c = report.kind_costs(groups[1], haiku, False, kinds)
+    assert c["kept"] == pytest.approx(0.002) and c["excluded_brand"] == pytest.approx(0.0005)
+    assert c["rejected"] == pytest.approx(0.00075), "the mean over every reject kind"
+    assert report.at_share(c, 0.0) == pytest.approx(0.002) and report.at_share(c, 0.5) == pytest.approx(0.001375)
+    md = "\n".join(report.by_kind(groups, [haiku], {"graph"}, kinds))
+    assert "| graph | batch | $1.00 | $0.38 |" in md, "batch halves it; per 1,000 items"
+    assert "Not split: claude-code" in md and "| Book |" not in md, "only the kinds the run has"

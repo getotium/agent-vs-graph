@@ -198,6 +198,65 @@ def _paired(
     return out
 
 
+KEPT = "new"  # the kind an intake item the store should take has; every other kind is a reject
+KIND_NAMES = {"new": "New", "catalog_duplicate": "Catalog duplicate", "feed_duplicate": "Feed duplicate",
+              "excluded_brand": "Excluded brand", "excluded_kind": "Book"}  # fmt: skip
+SHARES = (0.0, 0.2, 0.5, 0.85, 0.9)
+
+
+def kind_costs(g: Group, price: Price, batch: bool, kinds: dict[str, str]) -> dict[str, float]:
+    """Mean cost per item of each kind, plus "kept" and "rejected" over every reject kind."""
+    by: dict[str, list[float]] = defaultdict(list)
+    for item, cost in g.unit_costs(price, batch).items():
+        if item in kinds:
+            by[kinds[item]].append(cost)
+            by["kept" if kinds[item] == KEPT else "rejected"].append(cost)
+    return {k: sum(v) / len(v) for k, v in by.items()}
+
+
+def at_share(costs: dict[str, float], share: float) -> float:
+    """Cost per item for a feed with `share` rejects, rejects in the measured mix of kinds."""
+    return costs.get("kept", 0.0) * (1 - share) + costs.get("rejected", 0.0) * share
+
+
+def by_kind(groups: list[Group], prices: list[Price], batchable: set[str], kinds: dict[str, str],
+            guide: str = "") -> list[str]:  # fmt: skip
+    """Each per-item arm's cost by kind of item, and its cost per 1,000 items across reject shares.
+    Priced as the run's own model when it was hosted, else at the first price."""
+    own = [p for p in prices if any(_billed_by(r, p) for g in groups for r in g.records)] or prices[:1]
+    split = [g for g in groups if g.per_item_units]
+    seen = [k for k in KIND_NAMES if k in set(kinds.values())]
+    out: list[str] = []
+    for price in own:
+        out += [f"### Cost by kind of item, priced as {price.id}", ""]
+        out += _about("What one item of each kind cost each arm, per 1,000 items: a reject stopped early costs "
+                      "little, a kept item pays for its content.", guide, "cost-by-kind-of-item")  # fmt: skip
+        out += ["| Arm | Mode | Kept | Rejected | " + " | ".join(KIND_NAMES[k] for k in seen) + " |",
+                "| --- | --- | ---: | ---: | " + " | ".join("---:" for _ in seen) + " |"]  # fmt: skip
+        rows = []
+        for g in split:
+            for batch in _modes(g.arm, price, batchable):
+                c = kind_costs(g, price, batch, kinds)
+                rows.append((g.arm, batch, c))
+                cells = " | ".join(_usd(c[k] * 1000) if k in c else "–" for k in seen)
+                out.append(f"| {g.arm} | {'batch' if batch else 'real-time'} | {_usd(c.get('kept', 0) * 1000)} | "
+                           f"{_usd(c.get('rejected', 0) * 1000)} | {cells} |")  # fmt: skip
+        out += ["", "Per 1,000 items, for a feed with this share of rejects (rejects in this run's mix of kinds):", "",
+                "| Arm | Mode | " + " | ".join(f"{s:.0%}" for s in SHARES) + " |",
+                "| --- | --- | " + " | ".join("---:" for _ in SHARES) + " |"]  # fmt: skip
+        for arm, batch, c in rows:
+            cells = " | ".join(_usd(at_share(c, s) * 1000) for s in SHARES)
+            out.append(f"| {arm} | {'batch' if batch else 'real-time'} | {cells} |")
+        out.append("")
+        whole = [g.arm for g in groups if not g.per_item_units]
+        if whole:
+            out += [(f"Not split: {', '.join(whole)}, handed the whole feed at once, so no request belongs to "
+                     "one item."), ""]  # fmt: skip
+        out += [("A product listed several times in the feed is counted under each listing's own kind, "
+                 "whichever listing was catalogued."), ""]  # fmt: skip
+    return out
+
+
 def render(
     groups: list[Group],
     prices: list[Price],
@@ -208,12 +267,15 @@ def render(
     passed: dict[tuple[str, str], dict[str, bool]] | None = None,
     pairs: list[tuple[str, str]] | None = None,
     guide: str = "",
+    kinds: dict[str, dict[str, str]] | None = None,
 ) -> str:
     """`success` is each (task, arm)'s success rate from `avg score`; with it, each row also shows
     the cost per 1,000 successful items, so an arm cannot look cheap by failing. `pairs` are
     (graph, agent) arms to compare item by item, on success too when `passed` has both arms'
     per-item results. `guide` is a link to docs/reading-reports.md from where the report will be
-    read; with it, each table links to its column definitions."""
+    read; with it, each table links to its column definitions. `kinds` gives, per task, each
+    item's kind (catalog intake's "new", "catalog_duplicate", ...); with it, a task's costs are
+    also split by kind and drawn across reject shares."""
     success = success or {}
     out: list[str] = [f"# {title}", ""]
     for task in sorted({g.task for g in groups}):
@@ -293,6 +355,8 @@ def render(
                 src += f" **Unverified:** {price.verify}"
             out += ["", src, ""]
         out += _paired(tg, prices, batchable, passed or {}, pairs or [], guide)
+        if (kinds or {}).get(task):
+            out += by_kind(tg, prices, batchable, kinds[task], guide)  # type: ignore[index]
         not_batch = sorted({g.arm for g in tg} - batchable)
         if not_batch:
             out += [

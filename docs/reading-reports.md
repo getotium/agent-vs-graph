@@ -116,6 +116,14 @@ Each `graph-<model>` arm (and its lean variant) next to `agent-<model>`, over th
 | Graph − agent, per 1,000 items | The mean per-item cost difference, times 1,000, with its 90% interval. Negative: the graph costs less. The agent is always priced real-time. |
 | Relative | That difference as a share of the agent's cost. |
 
+## Cost by kind of item
+
+Catalog intake runs only. Each per-item arm's mean cost for one item of each kind, per 1,000
+items, priced as the run's own model when it was hosted. **Kept** is the mean over new products,
+**Rejected** over every other kind. The second table draws the cost per 1,000 items for feeds with
+other shares of rejects: kept × (1 − share) + rejected × share, with the rejects in the run's own
+mix of kinds. A whole-file harness is not split, since none of its requests belongs to one item.
+
 ## Intervals
 
 Every interval is a 90% bootstrap interval: resample the run's items 2,000 times (seeded, so a

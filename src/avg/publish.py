@@ -84,12 +84,22 @@ def publish(
         passed={tuple(k.split(":", 1)): v["passed"] for k, v in counts.items()},
         pairs=paired.default_pairs(set(arms)),
         guide=GUIDE,
+        kinds=_kinds(counts),
     )
     _, body = md.split("\n", 1)
     head = context(run, meta, groups, table)
     (dst / "report.md").write_text("\n".join(head) + body, encoding="utf-8", newline="\n")
     index(results)
     return Published(dst, arms)
+
+
+def _kinds(counts: dict) -> dict[str, dict[str, str]]:
+    """Per task, each item's kind, from any arm's scores that carry them (catalog intake's do)."""
+    out: dict[str, dict[str, str]] = {}
+    for key, v in counts.items():
+        if v.get("kinds"):
+            out.setdefault(key.split(":", 1)[0], v["kinds"])
+    return out
 
 
 # Links from results/<run>/report.md back into the repo.
