@@ -3,6 +3,22 @@
 Why the benchmark measures what it does, and the decisions behind it. The README says how to run
 it; this says why it is built this way. When a decision changes, change it here with the reason.
 
+## Words used here
+
+| Word | Meaning |
+| --- | --- |
+| **Agent** | A model given a goal and tools, deciding its own next step, turn by turn, until it stops. |
+| **Graph** (workflow graph) | Steps written down in advance and run in a fixed order; code, not the model, decides what happens next. |
+| **Arm** | One approach under test, on one model: `graph-12b`, `agent-12b`, `claude-code-haiku`. |
+| **Harness** | An off-the-shelf agent program, such as Claude Code, that runs the agent loop for you. |
+| **Token** | A piece of a word. Models read and write tokens, and providers charge per token. |
+| **Prompt caching** | A provider discount for the start of a prompt it has seen recently. Agents re-send their conversation every turn, so caching matters most to them. |
+| **Batch** | Requests sent together to be answered within a day rather than at once, at about half price. |
+| **Thinking** | Tokens a model spends reasoning before it answers. Billed as output. |
+| **Gold answer** | The known right answer an output is scored against: here, the brand in the catalog's own data. |
+| **The meter** | This repo's proxy between every arm and its model, which counts each request's tokens. |
+| **Ledger** | The meter's record of every request: tokens and a fingerprint of the prompt, never its text. |
+
 ## The question
 
 When the steps of a job are known in advance, does writing them down as a fixed workflow graph
@@ -59,12 +75,13 @@ that only lets you set a base URL needs nothing else. The ledger holds tokens, n
 report prices it afterwards from a sheet whose every entry names its source page and the date it
 was checked, so a price change never needs a rerun.
 
-**Prompt caching is replayed, not read from the local server.** The local server's cache hits
-depend on how many slots it runs, which says nothing about what a provider would bill. The meter
-records a hash of the prompt at each point a cache could match (never the text), and the report
-replays each provider's own rule over them: automatic caching of every prefix past a minimum for
-OpenAI, prefixes marked where a later request reuses them for Anthropic (the caller's best case),
-each with its minimum length and lifetime. An entry is usable only once the request that wrote it
+**Prompt caching is worked out afterwards, not taken from the local server.** The local server's
+own cache depends on how it is configured, which says nothing about what a provider would bill. So
+the meter records a fingerprint (a hash) of the start of each prompt, at each length a cache could
+match, and the report replays each provider's own caching rules over those fingerprints. OpenAI
+caches automatically past a minimum length. Anthropic caches what the caller marks, and the report
+assumes the caller marked exactly the parts a later request reuses, the best case. Each rule keeps
+its own minimum length and lifetime, and a cached entry counts only once the request that wrote it
 has finished.
 
 ## Scoring
@@ -129,35 +146,38 @@ part of the result.
 
 ## Statistics
 
-Each arm's mean cost per item carries a 90% bootstrap interval: how sure the sample makes us of
-the average, not how much a real month will vary. At 500 items the intervals are about ±2%.
+Each arm's average cost per item comes with a 90% interval, worked out by resampling the items (a
+bootstrap). It says how sure the sample makes us of the average, not how much a real month's bill
+will vary. At 500 items the intervals are about ±2%.
 
 Every arm runs the same items, so a graph arm and the agent on the same model are compared item by
-item: success with McNemar's exact test (only the items where the arms disagree say which is
-better), cost as a bootstrap interval on the per-item difference. Pairing removes the items' own
-spread, which is most of the variation.
+item. For accuracy, only the items where one got it right and the other did not say which is better;
+McNemar's exact test turns those counts into a p value, the chance of a split that uneven if the two
+were equally good. For cost, the interval is on the per-item difference. Comparing item by item
+removes the items' own differences (a long listing costs more for everyone), which are most of the
+variation.
 
 ## Running conditions
 
-- **Local first.** llama.cpp's `llama-server` with Google's Gemma 4 at two sizes, E4B and 12B, the
-  official QAT builds pinned by revision and SHA-256. The same family and quantization at both
-  sizes, so size is the only thing that changes. Local runs cost nothing to reproduce; a small
+- **Local first.** llama.cpp's `llama-server` with Google's Gemma 4 at two sizes, E4B and 12B:
+  Google's own compressed (QAT) builds, pinned by version and checked by hash. The same family and
+  compression at both sizes, so size is the only thing that changes. Local runs cost nothing to reproduce; a small
   hosted check shows whether the token counts carry over.
 - **One model loaded at a time.** `avg serial` runs the arms in turn, starting only the servers
-  each arm needs, so a run does not take over the machine. Per-item arms run four requests at once,
-  each with its own server slot; a harness gets one slot with a larger context.
+  each arm needs, so a run does not take over the machine. Per-item arms run four requests at once;
+  a harness gets one at a time, with room for a longer conversation (context).
 - **Thinking is a condition of the run,** off or a fixed token budget for every arm, recorded with
   the run. Both conditions are published: thinking changes output length several times over, and
   which shape it favors is a result.
 - **Hosted runs** put the same arms on Claude Haiku 5.5 through Anthropic's own API, so the
   agent arms run on a model of the kind they are built for, and the token counts and cache use
-  are the vendor's, not estimates. Our own arms speak the native Messages API rather than an
-  OpenAI-compatible shim, so caching can be set as a careful builder would: every arm marks its
-  shared system prompt, and the agent also turns on automatic caching of its growing conversation
-  (the documented pattern for agent loops). A graph step's request ends in one item's listing, so
-  caching its tail would only pay the write premium. Sampling is left at the model's default,
-  which this model requires. Requests the priced model answered itself are billed as the vendor
-  counted them; nothing is replayed for them.
+  are the vendor's, not estimates. Our own arms use Anthropic's own API format, so caching can be
+  set up as a careful builder would: every arm marks its shared instructions (system prompt) for
+  caching, and the agent also caches its growing conversation, as Anthropic's docs recommend for
+  agents. A graph step's request ends with one item's listing, which no other request repeats, so
+  caching it would only pay the extra charge for writing to the cache. Sampling settings are left at
+  the model's defaults, which this model requires. Requests the priced model answered itself are
+  billed exactly as the vendor counted them; nothing is replayed for them.
 - **Hosted runs have two conditions.** *Model default*: every arm runs the model as it ships
   (Haiku 5.5: adaptive thinking at medium effort), the way customers use it. *Thinking off*: the
   graph and the per-item agent with thinking disabled, matching the local thinking-off runs.
@@ -198,9 +218,9 @@ should get the expensive part, the content written for the store's pages. How mu
 rejected depends on the supplier: a specialist taking a specialist's feed rejects a fifth or so; a
 specialist taking a general retailer's feed can reject most of it.
 
-**Items.** Built from the same ESCI catalog as task 1, by `avg data intake`, seeded, from public
-data only. Each input has an opaque id (`p` and eight hex digits), so nothing about an item can be
-read from its id. Every item is one of:
+**Items.** Built from the same ESCI catalog as task 1 by `avg data intake`, from public data only,
+and the same every time it is rebuilt. Each item has a meaningless id (`p` and eight hex digits),
+so nothing about an item can be read from its id. Every item is one of:
 
 | Kind | What it is | Should be |
 | --- | --- | --- |
@@ -231,8 +251,8 @@ read from its id. Every item is one of:
   are the same for both.
 
 **What a kept item gets.** Task 1's record (category, brand, color, specs, a short description),
-plus the content a store page needs: an SEO title of at most 60 characters, a meta description of
-120 to 160 characters and a long description of 120 to 200 words, written rather than copied by
+plus the content a store page needs: a page title for search engines of at most 60 characters, a
+search-result summary (meta description) of 120 to 160 characters and a long description of 120 to 200 words, written rather than copied by
 the same rule as the short one. The content is the expensive tail; the report says what it cost
 against the checks before it.
 

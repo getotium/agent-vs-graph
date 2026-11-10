@@ -1,7 +1,7 @@
 [project]
 name = "agent-vs-graph"
 version = "0.1.0"
-description = "What the same work costs as an agent loop and as a workflow graph, measured at the wire."
+description = "A benchmark utility that compares the cost and accuracy of agent and workflow-graph AI inference workloads."
 readme = "README.md"
 license = "Apache-2.0"
 requires-python = ">=3.11"

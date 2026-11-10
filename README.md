@@ -1,134 +1,156 @@
 # agent-vs-graph
 
-What does the same job cost when an agent loop drives it, and when it is written down as a fixed
-workflow graph? This benchmark measures it: the same tasks, the same inputs, the same models and
-tools, scored the same way, run both ways, with every model request counted at the wire.
+A benchmark utility that compares the cost and accuracy of two kinds of AI inference workload run
+on the same job:
 
-It is not trying to show that one shape always wins. Agents are the right tool when the steps
-are not known in advance; graphs are cheaper when they are. The point is to measure where the
-line is and how much it is worth, so you can pick the right shape for your own work.
+- **Agent:** the model is given the goal and some tools, and decides each next step itself until
+  it is done.
+- **Workflow graph:** the steps are written down in advance and run in a fixed order, with the
+  model doing one step at a time.
 
-> **Status: in development.** Task 1 (product enrichment) and catalog intake (task 1 with rejects)
-> are published in [`results/`](results/), locally on Gemma 4 and hosted on Claude Haiku 5.5. The
-> other tasks come next (see [Plan](#plan)). Small development runs are not results and are not
-> published.
+Both get the same tasks, inputs, models and tools, and are scored the same way. Every request to
+the model passes through a proxy that counts its tokens, so costs are measured, not estimated.
+Neither approach is expected to win everywhere: agents suit work whose steps cannot be known in
+advance. The results show where each is cheaper or more accurate, and by how much.
 
-Why it is built this way, and the decisions behind it: [docs/design.md](docs/design.md).
-What a published report's tables and columns mean: [docs/reading-reports.md](docs/reading-reports.md).
+> **About Otium.** This benchmark is maintained by [Otium](https://getotium.ai), which runs batch
+> AI workflows on spare cloud GPUs. The benchmark does not use or need Otium: every run here used
+> a local GPU or Anthropic's API, and Otium appears in the reports only as one price beside
+> OpenAI's and Anthropic's.
+
+> **Status: in development.** Two tasks are published in [`results/`](results/): product
+> enrichment, and catalog intake (the same job, with items that should be turned away). Product
+> enrichment ran on open models on a local GPU and on Claude Haiku 5.5 through Anthropic's API;
+> catalog intake ran on Haiku 5.5. More tasks come next (see [Plan](#plan)). Small test runs are
+> not results and are not published.
+
+Why it is built this way: [docs/design.md](docs/design.md). What each table in a report means:
+[docs/reading-reports.md](docs/reading-reports.md).
 
 ## Results so far
 
-From the runs in [`results/`](results/), 500 items each, after one round of tuning per side.
-Costs are per 1,000 items at Claude Haiku 5.5's published prices; "batch" is the same tokens at
-the batch discount, which only the graph can take. Each figure is one run.
+Each run gave the same 500 items to every approach. Each side had one round of improvements
+before these runs, then was frozen. Costs are per 1,000 items, at Claude Haiku 5.5's published
+prices. Each figure comes from a single run.
 
-| Run | Success, graph vs agent | Paired p | Graph, real-time | Agent, real-time | Graph, batch |
+| Run | Right, graph vs agent | p | Graph cost | Agent cost | Graph cost, batch |
 | --- | --- | ---: | ---: | ---: | ---: |
 | [`big-final-think`](results/big-final-think/report.md): Gemma 4 12B, thinking on | 97% vs 95% | 0.012 | $1.25 | $0.88 | $0.62 |
 | [`big-final-off`](results/big-final-off/report.md): Gemma 4 12B, thinking off | 94% vs 90% | < 0.001 | $0.22 | $0.29 | $0.11 |
-| [`h-final`](results/h-final/report.md): Haiku 5.5, model default | 97% vs 96% | 0.62 | $0.66 | $0.53 | $0.33 |
+| [`h-final`](results/h-final/report.md): Haiku 5.5, thinking at its default | 97% vs 96% | 0.62 | $0.66 | $0.53 | $0.33 |
 | [`h-final-off`](results/h-final-off/report.md): Haiku 5.5, thinking off | 96% vs 96% | – | $0.43 | $0.43 | $0.22 |
-| [`h-intake2-20`](results/h-intake2-20/report.md): intake, 20% rejects, gated graph | 97% vs 97% | 0.39 | $1.43 | $1.50 | $0.72 |
-| [`h-intake2-85`](results/h-intake2-85/report.md): intake, 85% rejects, gated graph | 96% vs 96% | 0.77 | $0.37 | $0.45 | $0.18 |
+| [`h-intake2-20`](results/h-intake2-20/report.md): catalog intake, 20% to turn away | 97% vs 97% | 0.39 | $1.43 | $1.50 | $0.72 |
+| [`h-intake2-85`](results/h-intake2-85/report.md): catalog intake, 85% to turn away | 96% vs 96% | 0.77 | $0.37 | $0.45 | $0.18 |
 
-What they show so far:
+How to read it:
 
-- **The graph was never significantly less accurate.** On the 12B it was more accurate, with
-  thinking on and off; on Haiku every comparison is a tie.
-- **At real-time prices neither shape is reliably cheaper.** The agent's repeated context caches
-  well, and the graph's short, separate prompts barely do. In batch, the graph cost 27–62% less
-  than the agent in every run.
-- **Thinking can be set per step only in a graph.** The lean graph, thinking off for the
-  description alone, kept the 12B's 97% at $0.85 real-time ($0.42 batch).
-- **The whole-file harness cost the most.** Claude Code on task 1 cost $1.01 against the agent's
-  $0.53, at the same 96%; with a skill for the task, $3.27 and 94%.
-- **Early exit pays when it comes before the expensive step.** The agent stops early on its own.
-  The first intake graph rejected items only after a full extract and cost $0.65 at 85% rejects;
-  the gated graph, its round of tuning, checks first and costs $0.37. Why, and the untuned graph's
-  numbers: [docs/design.md](docs/design.md#catalog-intake).
+- **p** is the chance of seeing a gap this big if the two were really equally accurate. Below 0.05
+  means the gap is probably real; above it, call it a tie.
+- **Batch** is the same work sent as a batch: the provider runs it within a day instead of right
+  away, at half price. A graph can do this because each step's requests do not depend on each
+  other. An agent cannot, because each of its turns waits for the answer to the one before.
+- **Thinking** is the model reasoning before it answers. It often helps, and it costs tokens.
+- The intake rows use the graph that checks for rejects first (below).
+
+What the runs show so far:
+
+- **The graph was never measurably less accurate.** On the smaller local model it was more
+  accurate, with thinking on and off. On Haiku every comparison is a tie.
+- **Sent right away, neither is reliably cheaper.** The agent re-sends its whole conversation
+  each turn, but providers charge little for text they have just seen (prompt caching). The
+  graph's short, separate prompts get little of that discount.
+- **Sent as a batch, the graph cost 27–62% less than the agent in every published run.** This is
+  its clearest advantage.
+- **A graph can turn thinking on and off step by step.** Turning it off for the step that writes
+  the product description alone kept the 12B at 97% and cut its cost from $1.25 to $0.85 ($0.42
+  in batch). An agent has one setting for the whole conversation.
+- **The off-the-shelf agent cost the most.** Claude Code, handed the whole file, cost $1.01 against
+  the simple agent's $0.53 for the same 96%. With extra instructions for the task (a skill) it
+  cost $3.27 and got 94%.
+- **Stopping early only pays if you check before the expensive step.** The agent stops early on
+  its own. The first intake graph only checked for rejects after its most expensive step, and cost
+  $0.65 per 1,000 items when 85% were rejects. The second checks first and cost $0.37. More in
+  [docs/design.md](docs/design.md#catalog-intake).
 
 ## What is compared
 
-| Arm | Shape |
+| Approach | What it is |
 | --- | --- |
-| **Graph** | A fixed sequence of steps; each step runs over every item at once and reads only its own input. |
-| **Agent, per item** | One tool-calling agent per item, deciding its own steps. A minimal loop, so the mechanism is in plain view. |
-| **Agent, whole file** | A general-purpose agent harness handed the whole input ("process this file"): Claude Code and Hermes Agent, at their defaults. |
+| **Graph** | A fixed sequence of steps. Each step runs over every item at once and sees only what it needs. |
+| **Agent, one per item** | A small tool-using agent for each item, deciding its own steps. Kept minimal, so you can read exactly what it does. |
+| **Agent, whole file** | An off-the-shelf agent (Claude Code, Hermes Agent) told "process this file", with its default settings. |
 
-The costs we expect to differ, each reported separately so you can weigh them:
+Where we expect the costs to differ, each reported separately:
 
-1. **Re-reading.** An agent's turn N sends turns 1 to N−1 again. Prompt caching makes those
-   re-reads cheap, so each price gets its provider's cache, replayed over the recorded prompts
-   (below), and caching gets full credit where the provider gives it.
-2. **Model size per step.** A graph can send easy steps to a small model; an agent uses one
-   model for every decision. Each arm runs on a small and a larger model.
-3. **Batchability.** Every graph step can be a batch, which vendors sell at half price. An
-   agent's turns wait on each other and cannot.
-4. **Predictability.** A graph's cost can be estimated before it runs; the spread of cost per
-   item shows how far each arm's varies.
+1. **Re-reading.** On every turn, an agent sends the whole conversation so far back to the model.
+   Prompt caching makes the repeated part cheap, and the reports give each provider's caching
+   discount in full.
+2. **Model size.** A graph can send easy steps to a small, cheap model. An agent uses one model for
+   every decision. Each approach is run on a small and a larger model.
+3. **Batching.** Every graph step can go as a batch at half price. An agent's turns cannot.
+4. **Predictability.** A graph's cost can be estimated before it runs. The reports show how much
+   the cost per item varies for each approach.
 
 ## How it measures
 
-Every arm talks to its model through **the meter**, a pass-through proxy that records each
-request's tokens and the shape of its prompt (a hash at each point a cache could match, never the
-text) to a ledger. The local server's own cache hits are not priced: they depend on how many
-slots it runs. The report replays each arm's prompts against each provider's cache rule instead
-(automatic from 1,024 tokens for OpenAI; for Anthropic, prefixes marked where a later request
-reuses them, the caller's best case). An arm is pointed
-at a base URL that names what it is doing:
+Every approach talks to its model through **the meter**: a small proxy that passes each request
+through unchanged and writes down how many tokens it used. (A token is a piece of a word; providers
+charge per token.) It also records a fingerprint of each prompt, so caching can be priced later,
+but never the prompt's text. Each approach is pointed at an address that says what it is doing:
 
 ```
 http://127.0.0.1:8787/t/<run>/<arm>/<task>/<item>
 ```
 
-The meter forwards the rest to the real endpoint, in OpenAI chat-completions or Anthropic
-Messages format, streamed or not. Measuring at the wire means no framework can hide or
-double-count a request, and a harness that only lets you set a base URL needs nothing else.
+The meter works with OpenAI-style and Anthropic-style requests. Because it counts at the point the
+request leaves, no framework can hide or double-count a call, and an off-the-shelf agent that lets
+you set its server address needs nothing else.
 
-The ledger holds tokens, never money. **The report** prices it afterwards from a price sheet
-([`prices/default.yaml`](prices/default.yaml)) whose every entry names its source page and the
-date it was checked, so a price change needs no rerun and any run can be priced as any model.
-It projects each arm to 10,000, 100,000 and 1,000,000 documents a month and a year, with a 90%
-bootstrap interval on the cost per item.
+The meter records tokens, not money. **The report** prices them afterwards from a price list
+([`prices/default.yaml`](prices/default.yaml)) in which every price names the page it came from and
+the date it was checked. So a price change needs no rerun, and any run can be priced as any model.
+Caching is priced by replaying each approach's prompts under each provider's own caching rules,
+giving the approach the best discount that provider allows. Reports also project the cost to
+10,000, 100,000 and 1,000,000 items a month.
 
-Every arm runs the same items, so a graph arm and the agent arm on the same model are also
-compared item by item: success with McNemar's exact test on the items where they disagree, cost
-as a bootstrap interval on the per-item difference. Pairing takes out the items' own spread (a
-long listing costs more in every arm), so a real difference shows with far fewer items.
+Every approach gets the same items, so the graph and the agent on the same model are also compared
+item by item: on how many items only one of them was right (McNemar's exact test, which gives the
+p above), and on the cost difference per item. Comparing item by item cancels out the items' own
+differences (a long listing costs more for everyone), so a real gap shows up with fewer items.
 
-Runs are local first: llama.cpp's `llama-server` on one GPU, with Google's Gemma 4 at two sizes
-(E4B and 12B, the official QAT builds), so the numbers cost nothing to reproduce. A small check
-against a hosted API (Claude Haiku 5.5) shows whether the token counts carry over.
+Runs are local first, with llama.cpp serving Google's Gemma 4 at two sizes (E4B and 12B) on one
+GPU, so anyone can reproduce the numbers for free. The same tasks are then run on Claude Haiku 5.5
+to check that the picture holds on a hosted model.
 
 ## Quick start
 
 Needs Python 3.11+ and [Task](https://taskfile.dev).
 
 ```
-task setup     # virtualenv and dependencies
-task test      # the tests: no network, no GPU, no API key
+task setup     # create the virtualenv and install
+task test      # the tests: no network, no GPU, no API key needed
 task check     # lint, format check and tests
 ```
 
-A dry run against the stand-in model:
+A dry run against a fake model, to see the meter work:
 
 ```
-task stub                                   # a fake model on :8080
-task meter                                  # the meter on :8787, in front of it
+task stub                                   # a fake model on port 8080
+task meter                                  # the meter on port 8787, in front of it
 curl -s http://127.0.0.1:8787/t/dry/graph/demo/item-1/v1/chat/completions \
   -H 'content-type: application/json' \
   -d '{"model":"m","messages":[{"role":"user","content":"hi"}]}'
-task report                                 # price runs/ledger.jsonl
+task report                                 # price what the meter recorded
 ```
 
-## Running task 1 locally
+## Running on your own GPU
 
-Needs a GPU with about 16 GB free for both models (llama.cpp's Vulkan build is pinned for
-Windows; on Linux, set `LLAMA_SERVER` to your own build of the same release).
+Needs a GPU with about 16 GB of free memory for both models. The Taskfile downloads llama.cpp's
+Windows (Vulkan) build; on Linux, set `LLAMA_SERVER` to your own build of the same release.
 
 ```
-task models llama            # the two Gemma 4 GGUFs and llama.cpp, checked by SHA-256
-task serve:12b               # in one terminal; the GPU is `device` in local.toml (see below)
+task models llama            # download both Gemma 4 models and llama.cpp, checking their hashes
+task serve:12b               # in one terminal
 task serve:e4b               # in another
 task meter:local LEDGER=runs/r1/ledger.jsonl
 avg run --shape graph --arm graph --run r1 --limit 20 --small gemma-4-e4b --large gemma-4-12b --out runs/r1/graph.jsonl
@@ -138,55 +160,54 @@ avg score runs/r1/*.jsonl --out runs/r1/scores.json
 avg report runs/r1/ledger.jsonl --scores runs/r1/scores.json --items enrich:claude-code=20
 ```
 
-A run started by `task serial` records its conditions in `runs/<run>/meta.json`, including the
-commit of this repo it ran on; a rerun under other conditions is refused. `task publish RUN=r1`
-copies a finished run to [`results/`](results/), the committed record: its conditions, ledger,
-each arm's outputs, scores and a generated report. Server logs stay behind, since they name the
-machine's hardware.
+Or let `task serial RUN=r1` run every approach in turn, one model loaded at a time. It records the
+run's settings, including the commit of this repo, in `runs/<run>/meta.json`, and refuses to add to
+a run under different settings. `task publish RUN=r1` copies a finished run to
+[`results/`](results/): its settings, the meter's records, each approach's outputs, the scores and a
+generated report. Server logs are left out, since they describe the machine.
 
-Settings for your machine go in `local.toml` (gitignored), which overrides any key of
-[`local.default.toml`](local.default.toml): the GPU (`device`, a piece of its name as
-`llama-server --list-devices` prints it), the model files, Hermes's executable. Pin the GPU by
-name. Unpinned, llama.cpp splits a model across every device it finds, and a low device index
-can be an integrated GPU. `task serial RUN=r1` then runs every arm in turn, one model loaded at
-a time.
+Settings for your machine go in `local.toml` (not committed), which overrides
+[`local.default.toml`](local.default.toml): which GPU to use, where the model files are, and where
+Hermes Agent is installed. Name the GPU (`device`, part of its name as
+`llama-server --list-devices` prints it). Otherwise llama.cpp may spread a model across every GPU
+it finds, including a built-in one.
 
-The harness arms need a larger context than the default four slots give each request: serve
-the model with `SLOTS=1 CTX=65536` for them. Hermes Agent is run from its own source checkout and
-virtualenv (pass its executable with `--bin`); Claude Code from `claude` on your PATH. Both run
-in a scratch workspace with an empty config home, no credentials, and only the meter to talk to.
+The off-the-shelf agents read the whole file, so they need more room than the default settings
+give: serve the model with `SLOTS=1 CTX=65536` for them. Hermes Agent runs from its own checkout
+(pass its executable with `--bin`), and Claude Code from `claude` on your PATH. Both run in an
+empty scratch folder, with no saved settings or credentials, and can reach only the meter.
 
-## Running against a hosted model
+## Running on Claude Haiku 5.5
 
-`task hosted RUN=h1 LIMIT=50` runs the graph, the per-item agent and Claude Code against Claude
-Haiku 5.5 on Anthropic's API (arms `graph-haiku`, `agent-haiku`, `claude-code-haiku`). Put the
-key in `.env.local` as `ANTHROPIC_API_KEY=...`; the file is gitignored and only the Taskfile reads
-it. The meter sits in front of the API as before, on its own port, so a local run can go on at
-the same time. Thinking is off by default, matching the local thinking-off runs; `THINKING=default`
-leaves it to the model. `INTAKE=20` or `INTAKE=85` runs catalog intake on that mix instead of
-task 1, for `task serial` too.
+`task hosted RUN=h1 LIMIT=50` runs the graph, the per-item agent and Claude Code on Claude Haiku
+5.5 through Anthropic's API. Put your API key in `.env.local` as `ANTHROPIC_API_KEY=...`. That file
+is never committed, and only the Taskfile reads it. The meter runs on its own port, so a local run
+can go on at the same time.
 
-The inputs are 1,000 listings from Amazon's Shopping Queries dataset, Apache-2.0; see
-[data/enrich/README.md](data/enrich/README.md) for the attribution and how the sample is drawn.
+Options, for `task serial` too:
+
+- `THINKING=default` lets the model decide how much to think. Thinking is off otherwise.
+- `INTAKE=20` or `INTAKE=85` runs catalog intake instead of product enrichment, with that
+  percentage of items to turn away.
+
+The items are 1,000 product listings from Amazon's Shopping Queries dataset (Apache-2.0). See
+[data/enrich/README.md](data/enrich/README.md) for the credit and how they were chosen.
 
 ## Plan
 
-1. The meter, ledger, price sheets and report. **Done.**
-2. Task 1, product enrichment over a public catalog (Amazon's Shopping Queries dataset,
-   Apache-2.0), all arms. **Done.**
-3. The full local runs and their reports, committed with the ledgers. **Done:** task 1 at 500
+1. The meter, price lists and reports. **Done.**
+2. Task 1, product enrichment: turn a product listing into a clean catalog record. **Done.**
+3. Full runs on a local GPU, with the reports and the meter's records committed. **Done:** 500
    items, thinking on and off.
-4. The hosted check on Claude Haiku 5.5. **Done:** task 1, thinking off and at the model's
-   default.
-5. Catalog intake, task 1 with rejects, to measure early exit. **Done:** hosted, at 20% and 85%
-   rejects.
-6. Task 2 (repository review) and task 3 (a cited research brief over a fixed corpus), and a task
-   whose steps are open-ended, where an agent should win.
+4. The same task on Claude Haiku 5.5. **Done:** thinking off and at the model's default.
+5. Catalog intake: the same task with items that should be turned away, to measure stopping early.
+   **Done:** on Haiku, with 20% and 85% to turn away.
+6. Task 2 (reviewing code repositories), task 3 (a research brief that cites its sources), and a
+   task whose steps cannot be known in advance, where an agent should win.
 
-Prompts, tool schemas and graph definitions will all be in this repo. If you can make an agent
-arm cheaper without hurting its score, open a pull request: a better agent makes a better
-benchmark.
+Every prompt, tool and graph is in this repo. If you can make an agent cheaper without lowering its
+score, open a pull request: a better agent makes a better benchmark.
 
 ## License
 
-Apache-2.0. Built by [Otium](https://getotium.ai); the benchmark does not use or need Otium.
+Apache-2.0.
